@@ -6,12 +6,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import Actor, get_db, require_roles
-from app.models import Organization
-from app.schemas import OrganizationIn, OrganizationOut, OrganizationUpdate, Page
+from app.models import Organization, User
+from app.schemas import (CustomerContact, MyCustomerOut, OrganizationIn, OrganizationOut,
+                         OrganizationUpdate, Page)
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
-VIEWERS = ("superadmin", "center_admin", "ohs_engineer", "org_admin")
+VIEWERS = ("superadmin", "center_admin", "org_admin")
 CENTER = ("superadmin", "center_admin")
 
 
@@ -51,6 +52,18 @@ def create_organization(body: OrganizationIn, request: Request,
         entity_id=org.id, ip=client_ip(request),
         description=f"{actor.full_name} создал организацию «{org.name}»")
     return org
+
+
+@router.get("/mine", response_model=MyCustomerOut)
+def my_customer(actor: Actor = Depends(require_roles("employee", "org_admin")), db=Depends(get_db)):
+    """Организация-заказчик текущего пользователя и её представители (контакты для связи)."""
+    org = _get(db, actor.org_id)
+    reps = db.scalars(select(User).where(User.org_id == org.id, User.role == "org_admin", User.is_active)
+                      .order_by(User.full_name)).all()
+    return MyCustomerOut(name=org.name, inn=org.inn, kpp=org.kpp, legal_address=org.legal_address,
+                         contact_phone=org.contact_phone, contact_email=org.contact_email,
+                         responsible_name=org.responsible_name,
+                         contacts=[CustomerContact(full_name=u.full_name, phone=u.phone) for u in reps])
 
 
 @router.get("/{org_id}", response_model=OrganizationOut)

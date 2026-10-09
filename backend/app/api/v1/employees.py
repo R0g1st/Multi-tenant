@@ -14,25 +14,25 @@ from app.schemas import (CredentialsOut, EmployeeIn, EmployeeOut, EmployeeUpdate
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/employees", tags=["employees"])
-VIEWERS = ("superadmin", "center_admin", "ohs_engineer", "org_admin")
+VIEWERS = ("superadmin", "center_admin", "org_admin")
 ADMINS = ("superadmin", "center_admin", "org_admin")
 
 
 def _select():
-    return (select(Employee, Department.name, Position.name, User.is_active)
+    return (select(Employee, Department.name, Position.name, User.is_active, User.last_login_at)
             .outerjoin(Department, Department.id == Employee.department_id)
             .outerjoin(Position, Position.id == Employee.position_id)
             .outerjoin(User, User.id == Employee.user_id))
 
 
 def _out(row) -> EmployeeOut:
-    e, dept, pos, user_active = row
+    e, dept, pos, user_active, last_login = row
     return EmployeeOut(
         id=e.id, org_id=e.org_id, full_name=e.full_name, birth_date=e.birth_date,
         department_id=e.department_id, department_name=dept,
         position_id=e.position_id, position_name=pos,
         phone=e.phone, email=e.email, hired_at=e.hired_at, status=e.status,
-        has_access=bool(user_active))
+        has_access=bool(user_active), last_login_at=last_login)
 
 
 def _entity(db, employee_id: UUID) -> Employee:

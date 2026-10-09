@@ -16,14 +16,19 @@ router = APIRouter(prefix="/users", tags=["users"])
 STAFF = ("superadmin", "center_admin")
 # Какие роли может создавать и изменять каждая роль
 MANAGEABLE = {
-    "superadmin": {"superadmin", "center_admin", "ohs_engineer", "org_admin"},
-    "center_admin": {"ohs_engineer", "org_admin"},
+    "superadmin": {"superadmin", "center_admin", "org_admin"},
+    "center_admin": {"org_admin"},
 }
+
+
+def hidden_roles(actor: Actor) -> tuple[str, ...]:
+    """Главного администратора видит только главный администратор."""
+    return () if actor.role == "superadmin" else ("superadmin",)
 
 
 def _target(db, actor: Actor, user_id: UUID) -> User:
     user = db.get(User, user_id)
-    if user is None or user.role == "employee":
+    if user is None or user.role == "employee" or user.role in hidden_roles(actor):
         raise HTTPException(404, "Пользователь не найден")
     if user.role not in MANAGEABLE[actor.role]:
         raise HTTPException(403, "Недостаточно прав для управления этим пользователем")
@@ -41,6 +46,7 @@ def list_users(q: str | None = None, role: Role | None = None, org_id: UUID | No
                limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
                actor: Actor = Depends(require_roles(*STAFF)), db=Depends(get_db)):
     conds = [User.role == role] if role else [User.role != "employee"]
+    conds.append(User.role.not_in(hidden_roles(actor)))
     if org_id:
         conds.append(User.org_id == org_id)
     if q:

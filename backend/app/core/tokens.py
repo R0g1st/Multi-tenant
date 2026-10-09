@@ -31,3 +31,21 @@ def new_refresh_token() -> tuple[str, str]:
     """(сырой токен для клиента, хеш для хранения в БД)"""
     raw = secrets.token_urlsafe(48)
     return raw, hash_token(raw)
+
+
+FILE_LINK_HOURS = 3  # хватает, чтобы досмотреть длинное видео с перемоткой
+
+
+def create_file_token(item_id) -> str:
+    """Подписанная ссылка на файл: <video> и <a> не умеют передавать заголовок Authorization."""
+    now = datetime.now(timezone.utc)
+    payload = {"sub": str(item_id), "typ": "file", "iat": now, "exp": now + timedelta(hours=FILE_LINK_HOURS)}
+    return jwt.encode(payload, get_settings().secret_key, algorithm="HS256")
+
+
+def decode_file_token(token: str) -> str:
+    payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"],
+                         options={"require": ["exp", "sub"]})
+    if payload.get("typ") != "file":
+        raise jwt.InvalidTokenError("wrong token type")
+    return payload["sub"]

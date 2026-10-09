@@ -27,8 +27,7 @@ class Actor:
     @property
     def is_center_wide(self) -> bool:
         """Видит все организации: сотрудники учебного центра."""
-        return self.role in ("superadmin", "center_admin") or (
-            self.role == "ohs_engineer" and self.org_id is None)
+        return self.role in ("superadmin", "center_admin")
 
 
 def _unauthorized() -> HTTPException:
@@ -98,3 +97,13 @@ def require_org(db: Session, org_id: UUID) -> Organization:
     if org.status != "active":
         raise HTTPException(409, "Организация заблокирована")
     return org
+
+
+def can_manage(actor: Actor, owner_org: UUID | None) -> bool:
+    """Общие материалы и курсы (owner_org=None) ведёт учебный центр, свои — заказчик."""
+    return actor.is_center_wide or (actor.role == "org_admin" and owner_org == actor.org_id)
+
+
+def require_manage(actor: Actor, owner_org: UUID | None) -> None:
+    if not can_manage(actor, owner_org):
+        raise HTTPException(403, "Общие материалы и курсы может изменять только учебный центр")

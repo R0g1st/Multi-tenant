@@ -11,7 +11,7 @@ from app.models import Department, Employee, Position
 from app.schemas import CatalogIn, CatalogOut, CatalogUpdate
 from app.services.audit import client_ip, log
 
-VIEWERS = ("superadmin", "center_admin", "ohs_engineer", "org_admin")
+VIEWERS = ("superadmin", "center_admin", "org_admin")
 EDITORS = ("superadmin", "center_admin", "org_admin")
 
 

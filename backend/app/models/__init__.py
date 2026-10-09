@@ -1,9 +1,15 @@
 from app.models.core import (  # noqa: F401
+    Assignment,
     AuditLog,
+    Course,
+    CourseMaterial,
     Department,
     Employee,
+    LibraryFolder,
+    LibraryItem,
     Organization,
     Position,
     RefreshSession,
+    TestAttempt,
     User,
 )

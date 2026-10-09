@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     migration_database_url: str | None = None
     secret_key: str = "dev-only-change-me"
     storage_dir: str = "/app/storage"
+    library_max_upload_mb: int = 2048  # предельный размер одного файла библиотеки (видео)
     default_region: str = "RU"  # для разбора номеров телефона
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     max_failed_logins: int = 5
