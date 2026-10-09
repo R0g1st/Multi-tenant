@@ -9,7 +9,7 @@ services:
       OHS_APP_PASSWORD: ${OHS_APP_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro
+      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro,z
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
@@ -31,8 +31,8 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ./backend:/app
-      - ./storage:/app/storage
+      - ./backend:/app:z
+      - ./storage:/app/storage:z
     ports:
       - "8000:8000"
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

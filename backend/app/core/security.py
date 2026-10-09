@@ -34,3 +34,16 @@ def verify_password(password: str, password_hash: str) -> bool:
         return _hasher.verify(password_hash, password)
     except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
+
+
+import secrets as _secrets
+
+_TEMP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+
+def generate_temp_password(length: int = 10) -> str:
+    """Временный пароль без похожих символов (0/O, 1/l/I). Всегда буквы + цифры."""
+    while True:
+        pw = "".join(_secrets.choice(_TEMP_ALPHABET) for _ in range(length))
+        if any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw):
+            return pw
