@@ -109,3 +109,5 @@ input[type=checkbox],input[type=radio]{width:auto;margin:0;accent-color:var(--p)
 .tabs button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;padding:10px 14px;color:var(--m)}
 .tabs button:hover{color:var(--p)}.tabs button.on{color:var(--p);border-bottom-color:var(--p)}
 select.own{max-width:420px;margin-bottom:16px;font-weight:500}
+tr.lnk{cursor:pointer}tr.lnk:hover td{background:#f1f8f4}.card .bar h2{margin:0}
+.chk{display:flex;align-items:center;gap:8px;color:var(--t,inherit)}.chk input{margin:0}

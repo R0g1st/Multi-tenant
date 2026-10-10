@@ -40,5 +40,15 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+class WebFiles(StaticFiles):
+    """Файлы интерфейса: браузер перепроверяет их при каждом открытии (по ETag — без повторной
+    загрузки, если файл не менялся), поэтому после обновления сайта не остаётся старой версии."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Веб-интерфейс (без сборки, ~15 КБ). Подключается последним, чтобы не перекрывать API и /docs.
-app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="web")
+app.mount("/", WebFiles(directory=Path(__file__).parent / "static", html=True), name="web")

@@ -7,10 +7,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import Actor, get_db, require_org, require_roles, resolve_org
-from app.core.security import generate_temp_password, hash_password
+from app.core.security import hash_password
 from app.models import Department, Employee, Position, RefreshSession, User
 from app.schemas import (CredentialsOut, EmployeeIn, EmployeeOut, EmployeeUpdate,
-                         GrantAccessIn, Page)
+                         GrantAccessIn, Page, PasswordChoice, credentials, resolve_password)
+from app.services import password_book
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -69,7 +70,7 @@ def _revoke_sessions(db, user_id) -> None:
 @router.get("", response_model=Page[EmployeeOut])
 def list_employees(q: str | None = None, org_id: UUID | None = None,
                    department_id: UUID | None = None, position_id: UUID | None = None,
-                   status: Literal["active", "inactive"] | None = None,
+                   status: Literal["active", "inactive", ""] | None = None,  # "" — любой статус
                    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
                    actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
     conds = [Employee.deleted_at.is_(None)]
@@ -167,19 +168,20 @@ def restore_employee(employee_id: UUID, request: Request,
 @router.post("/{employee_id}/grant-access", response_model=CredentialsOut)
 def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None = None,
                  actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    """Создаёт (или повторно включает) личный кабинет сотрудника по номеру телефона."""
+    """Создаёт (или повторно включает) личный кабинет сотрудника по номеру телефона.
+    Пароль можно задать в запросе; иначе выдаётся случайный временный."""
     e = _entity(db, employee_id)
     if e.status != "active":
         raise HTTPException(409, "Сотрудник деактивирован. Сначала восстановите его.")
     require_org(db, e.org_id)
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is not None:
         if user.is_active:
             raise HTTPException(409, "Доступ уже выдан")
         user.is_active = True
         user.password_hash = hash_password(temp)
-        user.must_change_password = True
+        user.must_change_password = must_change
         user.failed_login_count = 0
         user.locked_until = None
         user.updated_at = datetime.now(timezone.utc)
@@ -188,7 +190,7 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
         if not phone:
             raise HTTPException(422, "Укажите номер телефона сотрудника")
         user = User(org_id=e.org_id, phone=phone, password_hash=hash_password(temp),
-                    full_name=e.full_name, role="employee", must_change_password=True)
+                    full_name=e.full_name, role="employee", must_change_password=must_change)
         db.add(user)
         try:
             db.flush()
@@ -201,19 +203,20 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
     log(db, actor=actor, org_id=e.org_id, action="employee.grant_access", entity_type="employee",
         entity_id=e.id, ip=client_ip(request), details={"user_id": str(user.id), "phone": user.phone},
         description=f"{actor.full_name} выдал доступ в систему сотруднику «{e.full_name}»")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "issued", by=actor.full_name)
+    return credentials(user, temp, must_change)
 
 
 @router.post("/{employee_id}/reset-password", response_model=CredentialsOut)
-def reset_password(employee_id: UUID, request: Request,
+def reset_password(employee_id: UUID, request: Request, body: PasswordChoice | None = None,
                    actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
     e = _entity(db, employee_id)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is None or not user.is_active:
         raise HTTPException(409, "У сотрудника нет активного доступа")
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user.password_hash = hash_password(temp)
-    user.must_change_password = True
+    user.must_change_password = must_change
     user.failed_login_count = 0
     user.locked_until = None
     user.updated_at = datetime.now(timezone.utc)
@@ -221,7 +224,8 @@ def reset_password(employee_id: UUID, request: Request,
     log(db, actor=actor, org_id=e.org_id, action="employee.reset_password", entity_type="employee",
         entity_id=e.id, ip=client_ip(request),
         description=f"{actor.full_name} сбросил пароль сотруднику «{e.full_name}»")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "reset", by=actor.full_name)
+    return credentials(user, temp, must_change)
 
 
 @router.post("/{employee_id}/revoke-access", response_model=EmployeeOut)

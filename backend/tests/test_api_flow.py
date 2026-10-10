@@ -121,6 +121,8 @@ def test_full_flow(ctx):
     adm_h = hdr(adm)
 
     items = client.get(f"{API}/employees", headers=adm_h).json()["items"]
+    # пустой фильтр «любой статус» не считается ошибкой
+    assert client.get(f"{API}/employees?status=&q=", headers=adm_h).status_code == 200
     assert items and all(i["org_id"] == org_a["id"] for i in items)
     # чужого сотрудника не видно и менять нельзя
     assert client.get(f"{API}/employees/{emp_b['id']}", headers=adm_h).status_code == 404
@@ -128,6 +130,23 @@ def test_full_flow(ctx):
     # нельзя создать сотрудника в чужой организации
     assert client.post(f"{API}/employees", headers=adm_h,
                        json={"org_id": org_b["id"], "full_name": "Чужой"}).status_code == 403
+
+    # пароль, заданный вручную: слабый не принимается, свой работает
+    phone_c = rnd_phone()
+    emp_c = client.post(f"{API}/employees", headers=adm_h,
+                        json={"full_name": f"Сидоров {tag}", "phone": phone_c}).json()
+    grant_url = f"{API}/employees/{emp_c['id']}/grant-access"
+    assert client.post(grant_url, headers=adm_h, json={"password": "12345678"}).status_code == 422
+    own = client.post(grant_url, headers=adm_h, json={"password": "Sidorov2026", "must_change": False})
+    assert own.status_code == 200, own.text
+    assert own.json()["temporary_password"] == "Sidorov2026" and own.json()["must_change_password"] is False
+    assert login(phone_c, "Sidorov2026")["must_change_password"] is False
+    # сброс со своим паролем: старый перестаёт работать, смена при входе по умолчанию нужна
+    reset = client.post(f"{API}/employees/{emp_c['id']}/reset-password", headers=adm_h,
+                        json={"password": "NewPass2026"})
+    assert reset.status_code == 200 and reset.json()["must_change_password"] is True
+    assert client.post(f"{API}/auth/login", json={"phone": phone_c, "password": "Sidorov2026"}).status_code == 401
+    assert login(phone_c, "NewPass2026")["must_change_password"] is True
     # чужую организацию не видно, создавать организации нельзя
     assert client.get(f"{API}/organizations/{org_b['id']}", headers=adm_h).status_code == 404
     assert client.post(f"{API}/organizations", headers=adm_h, json={"name": "Z"}).status_code == 403

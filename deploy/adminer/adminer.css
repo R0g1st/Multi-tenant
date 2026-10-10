@@ -1,0 +1,285 @@
+/* Тема Adminer для проекта «Охрана труда»: тёмно-синий и белый.
+   Подключается в docker-compose.yml вместо стандартной темы. */
+:root {
+  --navy-900: #0a1a3a;
+  --navy-800: #0f2550;
+  --navy-700: #163266;
+  --navy-600: #1e4185;
+  --blue-500: #2f62c9;
+  --blue-100: #e6edfb;
+  --blue-50: #f3f6fd;
+  --row-alt: #f8faff;
+  --line: #d5deef;
+  --line-soft: #e8edf7;
+  --text: #13213d;
+  --muted: #64728f;
+  --white: #fff;
+  --ok: #17803d;
+  --bad: #c62828;
+  --radius: 10px;
+  --menu-w: 260px;
+  --top-h: 56px;
+  --shadow: 0 2px 10px rgba(10,26,58,.06);
+}
+
+* { box-sizing: border-box; }
+html { background: var(--blue-50); }
+body {
+  margin: 0; width: auto; min-height: 100vh;
+  font: 14px/1.45 "Segoe UI", Roboto, Arial, sans-serif;
+  color: var(--text); background: var(--blue-50);
+}
+a, a:visited { color: var(--blue-500); text-decoration: none; }
+a:link:hover, a:visited:hover { color: var(--navy-700); text-decoration: underline; }
+code { background: var(--blue-100); padding: 1px 4px; border-radius: 4px; }
+p { margin: .8em 0 0; }
+h3 { font-size: 16px; font-weight: 600; margin: 24px 0 0; color: var(--navy-800); }
+sup { font-size: 10px; }
+
+/* ================= Левое меню ================= */
+#menu {
+  position: fixed; top: 0; left: 0; bottom: 0; width: var(--menu-w);
+  margin: 0; padding: 0 0 24px; overflow-y: auto;
+  background: linear-gradient(180deg, var(--navy-800), var(--navy-900));
+  color: #dfe7f7; z-index: 3;
+}
+#menu::-webkit-scrollbar { width: 8px; }
+#menu::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 8px; }
+#menu h1 {
+  margin: 0; padding: 0 18px; height: var(--top-h); display: flex; align-items: center;
+  font-size: 17px; font-weight: 600; line-height: 1.2;
+  background: transparent; border: 0; color: var(--white);
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+#menu h1 a, #h1 { color: var(--white) !important; font-style: normal; text-decoration: none !important; }
+#menu h1 small { display: block; font-size: 12px; font-weight: 400; color: #9fb2d9; margin-top: 2px; }
+#menu .version, #version { display: none; }
+#menu p, #logins { padding: 12px 18px; margin: 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+#menu a, #menu a:visited { color: #c9d6f2; }
+#menu a:hover { color: var(--white); text-decoration: none; }
+#menu select { width: 100%; margin: 2px 0 6px; background: var(--navy-800); color: var(--white); border-color: rgba(255,255,255,.2); }
+#dbs { overflow: visible; color: #9fb2d9; font-size: 12px; }
+#menu .links { display: flex; flex-wrap: wrap; gap: 6px; }
+#menu .links a {
+  margin: 0; padding: 4px 10px; border-radius: 6px; white-space: nowrap; font-size: 13px;
+  background: rgba(255,255,255,.08);
+}
+#menu .links a:hover { background: rgba(255,255,255,.18); }
+#menu .links a.active { background: var(--blue-500); color: var(--white); font-weight: 600; }
+
+/* Список таблиц (рисует плагин ohs-plugin.php) */
+#tables { margin: 0; padding: 10px 10px 0; list-style: none; border: 0; white-space: normal; overflow: visible; }
+.ohs-nav-title { padding: 0 8px 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #8ea3cf; }
+#tables li { list-style: none; display: flex; align-items: center; margin: 0 0 2px; border-radius: 8px; }
+#tables li:hover { background: rgba(255,255,255,.08); }
+#tables li.active { background: var(--blue-500); }
+#tables a { background: transparent !important; }
+#tables .ohs-open { flex: 1; min-width: 0; padding: 7px 8px; color: #e4ebfa; line-height: 1.25; }
+#tables .ohs-open b { display: block; font-weight: 500; white-space: normal; overflow-wrap: anywhere; }
+#tables .ohs-open small { display: block; font-size: 11px; color: #8ea3cf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tables li.active .ohs-open b { color: var(--white); font-weight: 600; }
+#tables li.active .ohs-open small { color: #dbe5fb; }
+#tables .ohs-struct {
+  flex: none; width: 28px; height: 28px; margin-right: 4px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; font-size: 14px; color: #8ea3cf;
+  opacity: 0; transition: opacity .15s;
+}
+#tables li:hover .ohs-struct, #tables li.active .ohs-struct { opacity: 1; }
+#tables .ohs-struct:hover { background: rgba(255,255,255,.15); color: var(--white); }
+
+/* ================= Верхняя строка ================= */
+#content { margin: 0 0 0 var(--menu-w); padding: calc(var(--top-h) + 24px) 28px 40px; min-width: 0; }
+#breadcrumb {
+  position: fixed; top: 0; left: var(--menu-w); right: 0; height: var(--top-h); margin: 0;
+  padding: 0 300px 0 28px; line-height: var(--top-h); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--white); color: var(--muted); border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 8px rgba(10,26,58,.06); z-index: 2;
+}
+#breadcrumb a { color: var(--navy-600); font-weight: 500; }
+
+/* Язык и «Выйти» — справа вверху */
+#lang {
+  position: fixed; top: 0; right: 20px; left: auto; height: var(--top-h); z-index: 5;
+  display: flex; align-items: center; gap: 6px; padding: 0; line-height: 1;
+  color: var(--muted); font-size: 12px; background: transparent; border: 0;
+}
+#lang select { padding: 4px 6px; font-size: 12px; }
+body:has(.logout) #lang { right: 112px; }
+.logout {
+  position: fixed; top: 0; right: 20px; height: var(--top-h); margin: 0; z-index: 5;
+  display: flex; align-items: center;
+}
+
+/* ================= Заголовок и кнопки разделов ================= */
+h1 { background: none; border: 0; }
+h2 {
+  margin: 0 0 18px; padding: 0; font-size: 22px; font-weight: 600; line-height: 1.3;
+  background: none; border: 0; color: var(--navy-800);
+}
+h2 .tn { font-size: 14px; font-weight: 400; color: var(--muted); }
+#content > .links, #content p.links { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+#content .links a {
+  margin: 0; padding: 6px 12px; border-radius: 8px; white-space: nowrap;
+  background: var(--white); border: 1px solid var(--line); color: var(--navy-700);
+}
+#content .links a:hover { background: var(--blue-100); text-decoration: none; }
+#content .links a.active { background: var(--navy-700); border-color: var(--navy-700); color: var(--white); }
+
+/* ================= Таблицы ================= */
+table {
+  margin: 14px 0 0; border-collapse: separate; border-spacing: 0; font-size: 13px;
+  background: var(--white); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+td table { width: 100%; margin: 0; box-shadow: none; }
+td, th {
+  border: 0; border-bottom: 1px solid var(--line-soft); padding: 8px 12px;
+  text-align: left; vertical-align: middle; background: transparent;
+}
+tbody tr:last-child > td, tbody tr:last-child > th, table > tr:last-child > td, table > tr:last-child > th { border-bottom: 0; }
+th { color: var(--navy-800); font-weight: 600; }
+thead th, thead td {
+  background: var(--navy-700); color: var(--white); font-weight: 600; text-align: left;
+  padding: 10px 12px; border-bottom: 0; white-space: nowrap; vertical-align: middle;
+}
+thead th a, thead th a:visited, thead td a, thead td a:visited { color: var(--white); }
+thead tr > :first-child { border-top-left-radius: calc(var(--radius) - 1px); }
+thead tr > :last-child { border-top-right-radius: calc(var(--radius) - 1px); }
+tbody tr:nth-child(even) > td, tbody tr:nth-child(even) > th, .odd td, .odd th { background: var(--row-alt); }
+tbody tr:hover > td, tbody tr:hover > th { background: var(--blue-100); }
+.js .checkable .checked td, .js .checkable .checked th { background: #d3e0fa; }
+td img { max-width: 200px; max-height: 200px; }
+.null, i { color: #9aa6bf; }
+td input[type=checkbox], th input[type=checkbox] { margin: 0 6px 0 0; }
+.nowrap td, .nowrap th, td.nowrap { white-space: nowrap; }
+.number, .datetime, td.number { text-align: right; }
+
+/* Широкие таблицы: прокрутка внутри рамки, шапка остаётся на месте.
+   Рамка по ширине таблицы, но не шире экрана. */
+.scrollable {
+  display: block; width: fit-content; max-width: 100%; overflow: auto; max-height: calc(100vh - 230px);
+  margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--white); box-shadow: var(--shadow);
+}
+.scrollable table { margin: 0; border: 0; box-shadow: none; border-radius: 0; }
+.scrollable thead th, .scrollable thead td { position: sticky; top: 0; z-index: 1; border-radius: 0; }
+.scrollable::-webkit-scrollbar, .sqlarea::-webkit-scrollbar { width: 12px; height: 12px; }
+.scrollable::-webkit-scrollbar-thumb { background: #b7c5e3; border-radius: 8px; border: 3px solid var(--white); }
+.scrollable::-webkit-scrollbar-thumb:hover { background: var(--navy-600); }
+.scrollable::-webkit-scrollbar-track { background: var(--blue-50); }
+.scrollable::-webkit-scrollbar-corner { background: var(--white); }
+.js .column {
+  position: absolute; margin-top: -4px; padding: 4px 8px; border-radius: 6px; z-index: 2;
+  background: var(--navy-900); box-shadow: 0 4px 12px rgba(0,0,0,.25);
+}
+.js .column a { color: var(--white); }
+
+/* Значения, которые подменяет плагин */
+.ohs-id { font-family: Consolas, monospace; color: var(--muted); }
+.ohs-ref { color: var(--navy-700); font-weight: 500; }
+.ohs-hidden { color: #9aa6bf; font-style: italic; }
+.ohs-yes { color: var(--ok); font-weight: 600; }
+.ohs-no { color: var(--muted); }
+
+/* ================= Формы ================= */
+fieldset {
+  display: inline-block; vertical-align: top; min-width: 0; margin: 0 8px 10px 0; padding: 10px 12px 12px;
+  background: var(--white); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+/* подпись блока — внутри рамки, а не на линии */
+legend {
+  float: left; width: 100%; margin: 0 0 6px; padding: 0;
+  font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+}
+legend + * { clear: left; }
+legend a, legend a:visited { color: var(--navy-700); }
+fieldset > div, fieldset > p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+fieldset > div > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+input, select, textarea {
+  font: inherit; font-size: 13px; color: var(--text); vertical-align: middle;
+  padding: 6px 9px; border: 1px solid #c3cee6; border-radius: 6px; background: var(--white);
+}
+select { padding-right: 4px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid rgba(47,98,201,.3); border-color: var(--blue-500); }
+input[type=checkbox], input[type=radio] { padding: 0; margin: 0 4px 0 0; width: auto; accent-color: var(--blue-500); }
+input[type=file] { border: 0; padding: 0; }
+label { white-space: nowrap; margin-right: 10px; }
+input[type=submit], input[type=button], button {
+  cursor: pointer; padding: 7px 14px; border: 0; border-radius: 7px;
+  background: var(--navy-700); color: var(--white); font-weight: 500;
+}
+input[type=submit]:hover, input[type=button]:hover, button:hover { background: var(--blue-500); }
+input.default { box-shadow: none; background: var(--blue-500); }
+input.required, input.maxlength { box-shadow: none; border-color: var(--bad); }
+input.size { width: 9ex; }
+.logout input[type=submit] { background: var(--white); color: var(--navy-700); border: 1px solid var(--line); }
+.logout input[type=submit]:hover { background: var(--blue-100); }
+pre, textarea { font: 13px/1.45 Consolas, monospace; }
+textarea { max-width: 100%; }
+#form textarea, table.layout textarea { height: 6.5em; }
+
+/* Поле SQL-запроса */
+.sqlarea, pre.sqlarea, textarea.sqlarea {
+  width: 100%; min-height: 220px; padding: 12px; margin: 0;
+  background: var(--white) !important; color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+
+/* Формы вида «подпись — поле» (вход, редактирование записи, экспорт, импорт) */
+table.layout {
+  width: auto; max-width: 100%; padding: 6px 18px; border: 1px solid var(--line);
+  background: var(--white); box-shadow: var(--shadow);
+}
+table.layout th {
+  width: 190px; padding: 10px 16px 10px 0; vertical-align: middle;
+  font-weight: 600; color: var(--navy-800); white-space: normal; background: transparent !important;
+}
+table.layout td { padding: 8px 0; vertical-align: middle; background: transparent !important; }
+table.layout tr:hover > td, table.layout tr:hover > th { background: transparent !important; }
+table.layout td label { display: inline-flex; align-items: center; margin: 2px 14px 2px 0; }
+table.layout input[type=text], table.layout input:not([type]), table.layout input[type=password],
+table.layout input[type=number], table.layout input[type=email], table.layout select:not([name^=function]),
+table.layout textarea { width: 320px; max-width: 100%; }
+td.function { width: 1%; padding-right: 8px; white-space: nowrap; }
+td.function select { width: 96px; color: var(--muted); }
+#form > p { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+
+/* Нижняя панель действий на странице таблицы */
+.footer { position: sticky; bottom: 0; margin: 0; border-top: 16px solid transparent; border-image: linear-gradient(rgba(243,246,253,0), var(--blue-50)) 100% 0; }
+.footer > div { background: var(--blue-50); padding: 0 0 8px; }
+.footer fieldset { margin-top: 0; }
+.pages { margin-top: 10px; }
+.pages a { padding: 2px 6px; border-radius: 4px; }
+.pages a:hover { background: var(--blue-100); }
+
+/* ================= Сообщения ================= */
+.error, .message { margin: 0 0 14px; padding: 10px 14px; border-radius: 8px; border-left: 4px solid; }
+.error { color: var(--bad); background: #fdecec; border-color: var(--bad); }
+.error b { background: transparent; }
+.message { color: var(--ok); background: #e9f6ee; border-color: var(--ok); }
+.message table { color: var(--text); }
+.time { color: var(--muted); }
+.ohs-login-hint {
+  max-width: 560px; margin: 0 0 16px; padding: 12px 16px; border-radius: var(--radius);
+  background: var(--white); border: 1px solid var(--line); color: var(--muted);
+}
+
+/* ================= Подсветка SQL ================= */
+.jush-sql_code, .jush-sqlite_code, .jush-pgsql_code { color: var(--navy-700); }
+.jush-num, .jush-clr { color: #8a2be2; }
+
+/* ================= Узкий экран ================= */
+@media (max-width: 880px) {
+  #menu, #lang, .logout, #breadcrumb { position: static; width: auto; height: auto; }
+  #menu h1 { height: auto; padding: 14px 18px; }
+  #content { margin-left: 0; padding: 16px; }
+  #breadcrumb { padding: 0 16px; line-height: 40px; }
+  #lang, .logout { padding: 8px 16px; }
+  .scrollable { max-height: none; }
+  table.layout th { width: auto; }
+}
+@media print {
+  #lang, #menu, .logout { display: none; }
+  #content { margin-left: 0; padding-top: 0; }
+  #breadcrumb { position: static; box-shadow: none; }
+}

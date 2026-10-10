@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.db import tenant_session
 from app.core.security import hash_password, verify_password
 from app.models import RefreshSession, User
+from app.services import password_book
 from app.services.audit import log
 
 
@@ -36,6 +37,7 @@ def sync(passphrase: str) -> tuple[int, list[str]]:
             if verify_password(entry["password"], user.password_hash) and not user.must_change_password:
                 continue
             user.password_hash = hash_password(entry["password"])
+            password_book.record(user, entry["password"], "vault")
             user.must_change_password = False
             user.failed_login_count = 0
             user.locked_until = None

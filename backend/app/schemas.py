@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.security import normalize_phone, validate_password_strength
+from app.core.security import generate_temp_password, normalize_phone, validate_password_strength
 
 Role = Literal["superadmin", "center_admin", "org_admin", "employee"]
 T = TypeVar("T")
@@ -72,7 +72,37 @@ class CredentialsOut(BaseModel):
     user_id: UUID
     phone: str
     temporary_password: str
+    must_change_password: bool = True
     message: str = "Пароль показан один раз. Передайте его пользователю; при первом входе он должен будет сменить пароль."
+
+
+class PasswordChoice(BaseModel):
+    """Пароль при выдаче доступа или сбросе. Не задан — сайт придумает временный сам."""
+    password: str | None = Field(default=None, max_length=200)
+    must_change: bool = True  # попросить сменить пароль при первом входе
+
+    @field_validator("password")
+    @classmethod
+    def _strength(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        validate_password_strength(v)
+        return v
+
+
+def resolve_password(choice: PasswordChoice | None) -> tuple[str, bool]:
+    """(пароль, нужно ли сменить при входе). Случайный пароль всегда временный."""
+    if choice is None or choice.password is None:
+        return generate_temp_password(), True
+    return choice.password, choice.must_change
+
+
+def credentials(user, password: str, must_change: bool) -> CredentialsOut:
+    out = CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=password,
+                         must_change_password=must_change)
+    if not must_change:
+        out.message = "Пароль показан один раз. Передайте его пользователю — менять его при входе не потребуется."
+    return out
 
 
 # ---- Организации ----
@@ -189,7 +219,7 @@ class EmployeeOut(BaseModel):
     last_login_at: datetime | None = None
 
 
-class GrantAccessIn(BaseModel):
+class GrantAccessIn(PasswordChoice):
     phone: str | None = None
 
     @field_validator("phone")
@@ -199,7 +229,7 @@ class GrantAccessIn(BaseModel):
 
 
 # ---- Пользователи (руководящие роли) ----
-class UserIn(BaseModel):
+class UserIn(PasswordChoice):
     phone: str
     full_name: str = Field(min_length=1, max_length=200)
     role: Role
