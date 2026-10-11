@@ -12,11 +12,15 @@ from app.models import Department, Employee, Position, RefreshSession, User
 from app.schemas import (CredentialsOut, EmployeeIn, EmployeeOut, EmployeeUpdate,
                          GrantAccessIn, Page, PasswordChoice, credentials, resolve_password)
 from app.services import password_book
+from app.services.archive import archive_at
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 VIEWERS = ("superadmin", "center_admin", "org_admin")
 ADMINS = ("superadmin", "center_admin", "org_admin")
+# Отключённых сотрудников видит и восстанавливает только главный администратор;
+# через неделю после отключения они уходят в архив «Прервано или закрыто».
+SEES_INACTIVE = "superadmin"
 
 
 def _select():
@@ -33,12 +37,12 @@ def _out(row) -> EmployeeOut:
         department_id=e.department_id, department_name=dept,
         position_id=e.position_id, position_name=pos,
         phone=e.phone, email=e.email, hired_at=e.hired_at, status=e.status,
-        has_access=bool(user_active), last_login_at=last_login)
+        has_access=bool(user_active), last_login_at=last_login, archive_at=archive_at(e))
 
 
-def _entity(db, employee_id: UUID) -> Employee:
+def _entity(db, employee_id: UUID, actor: Actor) -> Employee:
     e = db.get(Employee, employee_id)  # RLS скрывает сотрудников чужих организаций
-    if e is None or e.deleted_at is not None:
+    if e is None or e.deleted_at is not None or (e.status != "active" and actor.role != SEES_INACTIVE):
         raise HTTPException(404, "Сотрудник не найден")
     return e
 
@@ -75,14 +79,16 @@ def list_employees(q: str | None = None, org_id: UUID | None = None,
                    actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
     conds = [Employee.deleted_at.is_(None)]
     if q:
-        conds.append(Employee.full_name.ilike(f"%{q}%", autoescape=True))
+        conds.append(Employee.full_name.icontains(q, autoescape=True))
     if org_id:
         conds.append(Employee.org_id == org_id)
     if department_id:
         conds.append(Employee.department_id == department_id)
     if position_id:
         conds.append(Employee.position_id == position_id)
-    if status:
+    if actor.role != SEES_INACTIVE:
+        conds.append(Employee.status == "active")
+    elif status:
         conds.append(Employee.status == status)
     total = db.scalar(select(func.count()).select_from(Employee).where(*conds))
     rows = db.execute(_select().where(*conds).order_by(Employee.full_name)
@@ -108,14 +114,14 @@ def create_employee(body: EmployeeIn, request: Request,
 
 @router.get("/{employee_id}", response_model=EmployeeOut)
 def get_employee(employee_id: UUID, actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
-    _entity(db, employee_id)
+    _entity(db, employee_id, actor)
     return _view(db, employee_id)
 
 
 @router.patch("/{employee_id}", response_model=EmployeeOut)
 def update_employee(employee_id: UUID, body: EmployeeUpdate, request: Request,
                     actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     data = body.model_dump(exclude_unset=True)
     if data.get("full_name") is None:
         data.pop("full_name", None)
@@ -138,9 +144,10 @@ def update_employee(employee_id: UUID, body: EmployeeUpdate, request: Request,
 @router.post("/{employee_id}/deactivate", response_model=EmployeeOut)
 def deactivate_employee(employee_id: UUID, request: Request,
                         actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     e.status = "inactive"
     e.updated_at = datetime.now(timezone.utc)
+    e.deactivated_at = e.deactivated_at or e.updated_at  # повторное отключение не сдвигает срок архива
     if e.user_id:
         user = db.get(User, e.user_id)
         user.is_active = False
@@ -153,11 +160,12 @@ def deactivate_employee(employee_id: UUID, request: Request,
 
 @router.post("/{employee_id}/restore", response_model=EmployeeOut)
 def restore_employee(employee_id: UUID, request: Request,
-                     actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
+                     actor: Actor = Depends(require_roles(SEES_INACTIVE)), db=Depends(get_db)):
     """Возвращает сотрудника в список. Доступ в систему не восстанавливается автоматически:
     его нужно выдать заново кнопкой «Выдать доступ»."""
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     e.status = "active"
+    e.deactivated_at = None
     e.updated_at = datetime.now(timezone.utc)
     log(db, actor=actor, org_id=e.org_id, action="employee.restore", entity_type="employee",
         entity_id=e.id, ip=client_ip(request),
@@ -170,7 +178,7 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
                  actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
     """Создаёт (или повторно включает) личный кабинет сотрудника по номеру телефона.
     Пароль можно задать в запросе; иначе выдаётся случайный временный."""
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     if e.status != "active":
         raise HTTPException(409, "Сотрудник деактивирован. Сначала восстановите его.")
     require_org(db, e.org_id)
@@ -210,7 +218,7 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
 @router.post("/{employee_id}/reset-password", response_model=CredentialsOut)
 def reset_password(employee_id: UUID, request: Request, body: PasswordChoice | None = None,
                    actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is None or not user.is_active:
         raise HTTPException(409, "У сотрудника нет активного доступа")
@@ -231,7 +239,7 @@ def reset_password(employee_id: UUID, request: Request, body: PasswordChoice | N
 @router.post("/{employee_id}/revoke-access", response_model=EmployeeOut)
 def revoke_access(employee_id: UUID, request: Request,
                   actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is None or not user.is_active:
         raise HTTPException(409, "У сотрудника нет активного доступа")

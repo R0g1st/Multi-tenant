@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +23,17 @@ async def lifespan(_: FastAPI):
             logger.info("Файл паролей: обновлено %s, номеров без пользователя: %s", changed, len(missing))
         except Exception as exc:  # сервер должен стартовать, даже если файл не прочитан
             logger.error("Файл паролей не загружен: %s", exc)
+    task = asyncio.create_task(_archive_loop())
     yield
+    task.cancel()
+
+
+async def _archive_loop():
+    """Раз в час переносит в архив сотрудников, отключённых больше недели назад."""
+    from app.services.archive import run_safely
+    while True:
+        await asyncio.to_thread(run_safely)
+        await asyncio.sleep(3600)
 
 
 app = FastAPI(title="Платформа охраны труда", version="0.3.0", lifespan=lifespan)

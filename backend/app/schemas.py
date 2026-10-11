@@ -217,6 +217,7 @@ class EmployeeOut(BaseModel):
     status: str
     has_access: bool
     last_login_at: datetime | None = None
+    archive_at: datetime | None = None  # когда отключённый сотрудник уйдёт в архив
 
 
 class GrantAccessIn(PasswordChoice):

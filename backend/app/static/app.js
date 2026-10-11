@@ -70,16 +70,16 @@ function renderChange(forced){
 /* ---------- Каркас ---------- */
 function shell(){
   // у уровней 1–2 пунктов много — на главную ведёт логотип
-  const nav=center()?[['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/orgs','Заказчики'],['#/employees','Сотрудники'],['#/users','Пользователи'],...(me.role==='superadmin'?[['#/passwords','Пароли']]:[]),['#/audit','Журнал']]
+  const nav=center()?[['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/orgs','Заказчики'],['#/employees','Сотрудники'],['#/users','Пользователи'],...(me.role==='superadmin'?[['#/passwords','Пароли'],['#/archive','Архив']]:[]),['#/audit','Журнал']]
     :me.role==='org_admin'?[['#/','Главная'],['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/employees','Мои сотрудники']]
     :[['#/','Главная'],['#/learn','Моё обучение'],['#/customer','Мой заказчик']];
-  $('#app').innerHTML=`<header><div class="hd"><a class="logo" href="#/"><i>✚</i><span>Охрана труда<small>обучение персонала</small></span></a><nav>${nav.map(n=>`<a href="${n[0]}">${n[1]}</a>`).join('')}</nav><div class="me"><div><b>${e(me.full_name)}</b><small>${ROLE[me.role]}</small></div><button class="g" id="pw">Пароль</button><button class="b" id="out">Выйти</button></div></div></header><main id="v"></main><footer><div><span>© ${new Date().getFullYear()} Охрана труда · обучение персонала</span><span>${ROLE[me.role]}</span></div></footer>`;
+  $('#app').innerHTML=`<header><div class="hd${nav.length<=5?' few':''}"><a class="logo" href="#/"><i>✚</i><span>Охрана труда<small>обучение персонала</small></span></a><nav>${nav.map(n=>`<a href="${n[0]}">${n[1]}</a>`).join('')}</nav><div class="me"><div><b>${e(me.full_name)}</b><small>${ROLE[me.role]}</small></div><button class="g" id="pw">Пароль</button><button class="b" id="out">Выйти</button></div></div></header><main id="v"></main><footer><div><span>© ${new Date().getFullYear()} Охрана труда · обучение персонала</span><span>${ROLE[me.role]}</span></div></footer>`;
   $('#pw').onclick=()=>renderChange(false);
   $('#out').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{refresh_token:tok.refresh_token}})}catch{}save(null);me=null;renderLogin()};
 }
 
 const R={'':home,'library':library,'employees':employees,'orgs':orgs,'org':orgCard,'users':users,'audit':audit,'customer':customer,
-  'courses':courses,'course':courseEdit,'training':training,'learn':learn,'passwords':passwords};
+  'courses':courses,'course':courseEdit,'training':training,'learn':learn,'passwords':passwords,'archive':archive};
 async function route(){
   if(!me)return;if(!$('header'))shell();
   const [p,arg]=(location.hash.slice(2)||'').split('/'),v=$('#v');
@@ -282,20 +282,21 @@ async function employees(v){await staff(v,null)}
 async function staff(v,org){
   const w=center()&&!org,os=w?(await api('/organizations?limit=200')).items:[];
   const opts=os.map(o=>`<option value="${o.id}">${e(o.name)}</option>`).join('');
+  const sa=me.role==='superadmin'; // отключённых видит и восстанавливает только главный администратор
   const title=org?'<h2>Подчинённые</h2>':`<h1>${center()?'Сотрудники':'Мои сотрудники'}</h1>`;
-  v.innerHTML=`<div class="bar">${title}${canEdit()?`<button class="b" id="add">+ Добавить ${org?'подчинённого':'сотрудника'}</button>`:''}</div><div class="filters"><input id="q" placeholder="Поиск по ФИО…">${w?`<select id="o"><option value="">Все заказчики</option>${opts}</select>`:''}<select id="s"><option value="">Любой статус</option><option value="active">Активные</option><option value="inactive">Деактивированные</option></select></div><div id="tb"></div>`;
+  v.innerHTML=`<div class="bar">${title}${canEdit()?`<button class="b" id="add">+ Добавить ${org?'подчинённого':'сотрудника'}</button>`:''}</div><div class="filters"><input id="q" placeholder="Поиск по ФИО…">${w?`<select id="o"><option value="">Все заказчики</option>${opts}</select>`:''}${sa?'<select id="s"><option value="">Любой статус</option><option value="active">Активные</option><option value="inactive">Отключённые (видите только вы)</option></select>':''}</div><div id="tb"></div>`;
   const q=s=>v.querySelector(s);
   const btn=(a,id,t,c='g')=>`<button class="${c} sm" data-a="${a}" data-id="${id}">${t}</button>`;
-  const acts=x=>(x.status==='active'&&!x.has_access?btn('grant',x.id,'Выдать доступ','b'):'')+(x.has_access?btn('reset',x.id,'Сбросить пароль'):'')+btn(x.status==='active'?'off':'on',x.id,x.status==='active'?'Деактивировать':'Восстановить',x.status==='active'?'d':'g');
+  const acts=x=>(x.status==='active'&&!x.has_access?btn('grant',x.id,'Выдать доступ','b'):'')+(x.has_access?btn('reset',x.id,'Сбросить пароль'):'')+(x.status==='active'?btn('off',x.id,'Деактивировать','d'):sa?btn('on',x.id,'Восстановить'):'');
   const load=async()=>{
     const p=new URLSearchParams({limit:200});
-    if(q('#q').value)p.set('q',q('#q').value);if(q('#s').value)p.set('status',q('#s').value); // пустой фильтр не отправляем
+    if(q('#q').value)p.set('q',q('#q').value);if(sa&&q('#s').value)p.set('status',q('#s').value); // пустой фильтр не отправляем
     if(org)p.set('org_id',org.id);else if(w&&q('#o').value)p.set('org_id',q('#o').value);
     const d=await api('/employees?'+p);
-    q('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Подразделение</th><th>Телефон</th><th>Последний вход</th><th>Статус</th>${canEdit()?'<th></th>':''}</tr>${d.items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e(x.position_name||'')}</small></td><td>${e(x.department_name||'—')}</td><td>${e(x.phone||'—')}</td><td class="nw">${x.last_login_at?dt(x.last_login_at):(x.has_access?'Ещё не входил':'—')}</td><td><span class="s ${x.status}">${ST[x.status]}</span> ${x.has_access?'<span class="s ok">Есть доступ</span>':''}</td>${canEdit()?`<td class="ra">${acts(x)}</td>`:''}</tr>`).join('')}</table></div>`:`<div class="${org?'':'card '}empty">${org?'Подчинённых пока нет. Нажмите «Добавить подчинённого».':'Сотрудников не найдено.'}</div>`;
+    q('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Подразделение</th><th>Телефон</th><th>Последний вход</th><th>Статус</th>${canEdit()?'<th></th>':''}</tr>${d.items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e(x.position_name||'')}</small></td><td>${e(x.department_name||'—')}</td><td>${e(x.phone||'—')}</td><td class="nw">${x.last_login_at?dt(x.last_login_at):(x.has_access?'Ещё не входил':'—')}</td><td><span class="s ${x.status}">${ST[x.status]}</span>${x.archive_at?`<small>в архив ${dd(x.archive_at)}</small>`:''} ${x.has_access?'<span class="s ok">Есть доступ</span>':''}</td>${canEdit()?`<td class="ra">${acts(x)}</td>`:''}</tr>`).join('')}</table></div>`:`<div class="${org?'':'card '}empty">${org?'Подчинённых пока нет. Нажмите «Добавить подчинённого».':'Сотрудников не найдено.'}</div>`;
   };
   let t;const lazy=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};
-  q('#q').oninput=lazy;q('#s').onchange=lazy;if(w)q('#o').onchange=lazy;
+  q('#q').oninput=lazy;if(sa)q('#s').onchange=lazy;if(w)q('#o').onchange=lazy;
   if(canEdit())q('#add').onclick=()=>modal(org?'Новый подчинённый — '+e(org.name):'Новый сотрудник',`${w?`<label>Заказчик*<select name="org_id" required><option value="">Выберите…</option>${opts}</select></label>`:''}<label>ФИО*<input name="full_name" required></label><label>Телефон<input name="phone" type="tel" placeholder="+7 900 000-00-00"></label><p class="m" style="margin-top:-6px;font-size:13px">Телефон нужен, чтобы выдать сотруднику доступ в систему.</p><label>Дата приёма на работу<input name="hired_at" type="date"></label>`,'Добавить',async b=>{if(org&&center())b.org_id=org.id;await api('/employees',{method:'POST',body:b});toast('Сотрудник добавлен');load()});
   q('#tb').onclick=async ev=>{
     const b=ev.target.closest('button[data-a]');if(!b)return;const id=b.dataset.id,a=b.dataset.a;
@@ -307,7 +308,7 @@ async function staff(v,org){
     try{
       if(a==='grant')return pwDialog('Выдать доступ','Сотрудник будет входить по своему номеру телефона.','Выдать доступ',`/employees/${id}/grant-access`,load);
       if(a==='reset')return pwDialog('Новый пароль','Старый пароль перестанет работать, сотрудник будет отключён от сайта.','Сохранить пароль',`/employees/${id}/reset-password`,load);
-      if(a==='off')return confirmBox('Деактивировать сотрудника? Его доступ в систему будет закрыт.','Деактивировать',run);
+      if(a==='off')return confirmBox('Деактивировать сотрудника? Его доступ в систему закроется, он сразу пропадёт из списков у всех, кроме главного администратора, а через 7 дней будет удалён и перенесён в архив «Прервано или закрыто».','Деактивировать',run);
       await run();
     }catch(x){toast(x.message,1)}
   };
@@ -394,6 +395,27 @@ async function passwords(v){
     touch();draw();
   };
   lock();
+}
+
+/* ---------- Архив «Прервано или закрыто» (только главный администратор) ----------
+   Сюда через 7 дней после отключения переносятся сотрудники вместе с историей обучения. */
+const AST={assigned:'Назначено',in_progress:'В процессе',passed:'Пройдено'};
+async function archive(v){
+  v.innerHTML=`<div class="bar"><h1>Прервано или закрыто</h1></div><p class="m">Сотрудники, отключённые больше 7 дней назад. Из рабочих списков они удалены вместе со входом в систему; здесь сохранены их данные и обучение. Раздел видите только вы.</p><div class="filters"><input id="q" placeholder="Поиск по ФИО, заказчику или телефону…"></div><div id="tb"></div>`;
+  let items=[];
+  const load=async()=>{
+    const p=new URLSearchParams({limit:500});if($('#q').value)p.set('q',$('#q').value);
+    items=(await api('/archive?'+p)).items;
+    $('#tb').innerHTML=items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Заказчик</th><th>Телефон</th><th>Отключён</th><th>В архиве с</th><th></th></tr>${items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e([x.position_name,x.department_name].filter(Boolean).join(' · '))}</small></td><td>${e(x.org_name||'—')}</td><td class="nw">${e(x.phone||'—')}</td><td class="nw">${x.deactivated_at?dd(x.deactivated_at):'—'}</td><td class="nw">${dd(x.archived_at)}</td><td class="ra"><button class="g sm" data-id="${x.id}">Подробнее</button></td></tr>`).join('')}</table></div>`:'<div class="card empty">Архив пуст.</div>';
+  };
+  $('#tb').onclick=ev=>{const b=ev.target.closest('button[data-id]');if(!b)return;
+    const x=items.find(i=>i.id===b.dataset.id),d=x.data||{},em=d.employee||{},lg=d.login,tr=d.training||[];
+    modal(e(x.full_name),`<p>Заказчик: <b>${e(x.org_name||'—')}</b><br>Телефон: ${e(x.phone||'—')}${em.email?'<br>Эл. почта: '+e(em.email):''}${em.hired_at?'<br>Принят: '+dd(em.hired_at):''}<br>Отключён: ${x.deactivated_at?dt(x.deactivated_at):'—'}<br>Перенесён в архив: ${dt(x.archived_at)}</p>
+      <p>${lg?`Вход в систему был по номеру <b>${e(lg.phone)}</b>${lg.last_login_at?', последний вход '+dt(lg.last_login_at):', ни разу не входил'}.`:'Доступа в систему не было.'}</p>
+      ${tr.length?`<div class="tw"><table><tr><th>Курс</th><th>Статус</th><th>Результат</th><th>Пройден</th></tr>${tr.map(t=>`<tr><td>${e(t.course)}</td><td>${t.cancelled_at?'Отменено':AST[t.status]||e(t.status)}</td><td>${t.score!=null?t.score+'%':'—'}</td><td class="nw">${t.completed_at?dd(t.completed_at):'—'}</td></tr>`).join('')}</table></div>`:'<p class="m">Обучение не назначалось.</p>'}`,null,null,true);
+  };
+  let t;$('#q').oninput=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};
+  await load();
 }
 
 /* ---------- Журнал ---------- */

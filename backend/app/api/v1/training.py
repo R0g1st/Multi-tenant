@@ -61,7 +61,9 @@ def list_assignments(org_id: UUID | None = None, course_id: UUID | None = None,
     if employee_id:
         conds.append(Assignment.employee_id == employee_id)
     if q:
-        conds.append(Employee.full_name.ilike(f"%{q}%", autoescape=True))
+        conds.append(Employee.full_name.icontains(q, autoescape=True))
+    if actor.role != "superadmin":  # отключённые сотрудники видны только главному администратору
+        conds.append(Employee.status == "active")
     items = _rows(db, *conds)
     return [i for i in items if i.state == state_] if state_ else items
 

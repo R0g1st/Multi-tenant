@@ -183,7 +183,7 @@ def list_items(owner: str | None = None, folder_id: UUID | None = None,
     else:
         conds.append(_owner_cond(LibraryItem, owner_param(actor, owner)))
         if q:
-            conds.append(LibraryItem.title.ilike(f"%{q}%", autoescape=True))
+            conds.append(LibraryItem.title.icontains(q, autoescape=True))
         else:
             conds.append(LibraryItem.folder_id.is_(None))
     return db.scalars(select(LibraryItem).where(*conds).order_by(func.lower(LibraryItem.title))).all()

@@ -52,8 +52,8 @@ def list_users(q: str | None = None, role: Role | None = None, org_id: UUID | No
     if org_id:
         conds.append(User.org_id == org_id)
     if q:
-        conds.append(or_(User.full_name.ilike(f"%{q}%", autoescape=True),
-                         User.phone.ilike(f"%{q}%", autoescape=True)))
+        conds.append(or_(User.full_name.icontains(q, autoescape=True),
+                         User.phone.icontains(q, autoescape=True)))
     total = db.scalar(select(func.count()).select_from(User).where(*conds))
     items = db.scalars(select(User).where(*conds).order_by(User.full_name)
                        .limit(limit).offset(offset)).all()

@@ -7,7 +7,7 @@ import random
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 
 pytestmark = pytest.mark.skipif(
     not (os.getenv("DATABASE_URL") and os.getenv("MIGRATION_DATABASE_URL")), reason="нет БД")
@@ -27,6 +27,7 @@ def ctx():
     with eng.begin() as c:
         c.execute(text("SELECT set_config('app.bypass_rls','on',true)"))
         p = {"o": state["orgs"], "u": state["users"]}
+        c.execute(text("DELETE FROM employee_archive WHERE org_id = ANY(CAST(:o AS uuid[]))"), p)
         c.execute(text("""DELETE FROM audit_logs WHERE org_id = ANY(CAST(:o AS uuid[]))
             OR actor_user_id IN (SELECT id FROM users WHERE org_id = ANY(CAST(:o AS uuid[])) OR id = ANY(CAST(:u AS uuid[])))"""), p)
         for t in ("employees", "departments", "positions"):
@@ -154,13 +155,34 @@ def test_full_flow(ctx):
     assert client.get(f"{API}/audit", headers=adm_h).status_code == 403
 
     # деактивация сотрудника закрывает доступ
-    assert client.post(f"{API}/employees/{emp_a.json()['id']}/deactivate", headers=adm_h).status_code == 200
+    ea = emp_a.json()["id"]
+    assert client.post(f"{API}/employees/{ea}/deactivate", headers=adm_h).status_code == 200
     assert client.get(f"{API}/auth/me", headers=hdr(new_tokens)).status_code == 401
+    # отключённого видит только главный администратор (даже с фильтром «отключённые»)
+    assert all(i["id"] != ea for i in client.get(f"{API}/employees?status=inactive", headers=adm_h).json()["items"])
+    assert client.get(f"{API}/employees/{ea}", headers=adm_h).status_code == 404
+    assert client.post(f"{API}/employees/{ea}/restore", headers=adm_h).status_code == 403
+    seen = client.get(f"{API}/employees/{ea}", headers=sa_h).json()
+    assert seen["status"] == "inactive" and seen["archive_at"]
+
+    # через 7 дней — в архив «Прервано или закрыто»: из рабочих таблиц удаляется вместе со входом
+    from datetime import datetime, timedelta, timezone
+    from app.models import Employee
+    from app.services.archive import archive_expired
+    with tenant_session(bypass=True) as db:
+        db.get(Employee, uuid.UUID(ea)).deactivated_at = datetime.now(timezone.utc) - timedelta(days=8)
+    assert archive_expired(org_ids=[org_a["id"], org_b["id"]]) == 1
+    assert client.get(f"{API}/employees/{ea}", headers=sa_h).status_code == 404
+    with tenant_session(bypass=True) as db:
+        assert db.scalar(select(User).where(User.phone == phone_a)) is None
+    assert client.get(f"{API}/archive", headers=adm_h).status_code == 403
+    arch = client.get(f"{API}/archive", params={"q": f"Иванов {tag}"}, headers=sa_h).json()["items"]
+    assert len(arch) == 1 and arch[0]["phone"] == phone_a and arch[0]["data"]["login"]["phone"] == phone_a
 
     # аудит: действия записаны, пароль не попал в журнал
     audit = client.get(f"{API}/audit", params={"org_id": org_a["id"], "limit": 200}, headers=sa_h)
     assert audit.status_code == 200
     actions = {i["action"] for i in audit.json()["items"]}
-    assert {"employee.create", "employee.grant_access", "employee.deactivate", "user.create"} <= actions
+    assert {"employee.create", "employee.grant_access", "employee.deactivate", "employee.archive", "user.create"} <= actions
     dump = json.dumps(audit.json(), ensure_ascii=False)
     assert temp_pw not in dump and adm_pw not in dump
