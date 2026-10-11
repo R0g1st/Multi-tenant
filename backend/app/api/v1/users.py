@@ -7,9 +7,11 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import Actor, get_db, require_org, require_roles
-from app.core.security import generate_temp_password, hash_password
+from app.core.security import hash_password
 from app.models import RefreshSession, User
-from app.schemas import CredentialsOut, Page, Role, UserIn, UserOut, UserUpdate
+from app.schemas import (CredentialsOut, Page, PasswordChoice, Role, UserIn, UserOut, UserUpdate,
+                         credentials, resolve_password)
+from app.services import password_book
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -50,8 +52,8 @@ def list_users(q: str | None = None, role: Role | None = None, org_id: UUID | No
     if org_id:
         conds.append(User.org_id == org_id)
     if q:
-        conds.append(or_(User.full_name.ilike(f"%{q}%", autoescape=True),
-                         User.phone.ilike(f"%{q}%", autoescape=True)))
+        conds.append(or_(User.full_name.icontains(q, autoescape=True),
+                         User.phone.icontains(q, autoescape=True)))
     total = db.scalar(select(func.count()).select_from(User).where(*conds))
     items = db.scalars(select(User).where(*conds).order_by(User.full_name)
                        .limit(limit).offset(offset)).all()
@@ -71,9 +73,9 @@ def create_user(body: UserIn, request: Request,
         raise HTTPException(422, "Сотрудники создаются в разделе «Сотрудники»")
     if body.org_id is not None:
         require_org(db, body.org_id)
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user = User(org_id=body.org_id, phone=body.phone, password_hash=hash_password(temp),
-                full_name=body.full_name.strip(), role=body.role, must_change_password=True)
+                full_name=body.full_name.strip(), role=body.role, must_change_password=must_change)
     db.add(user)
     try:
         db.flush()
@@ -82,7 +84,8 @@ def create_user(body: UserIn, request: Request,
     log(db, actor=actor, org_id=user.org_id, action="user.create", entity_type="user",
         entity_id=user.id, ip=client_ip(request), details={"role": user.role, "phone": user.phone},
         description=f"{actor.full_name} создал пользователя «{user.full_name}» (роль: {user.role})")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "issued", by=actor.full_name)
+    return credentials(user, temp, must_change)
 
 
 @router.patch("/{user_id}", response_model=UserOut)
@@ -109,12 +112,12 @@ def update_user(user_id: UUID, body: UserUpdate, request: Request,
 
 
 @router.post("/{user_id}/reset-password", response_model=CredentialsOut)
-def reset_user_password(user_id: UUID, request: Request,
+def reset_user_password(user_id: UUID, request: Request, body: PasswordChoice | None = None,
                         actor: Actor = Depends(require_roles(*STAFF)), db=Depends(get_db)):
     user = _target(db, actor, user_id)
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user.password_hash = hash_password(temp)
-    user.must_change_password = True
+    user.must_change_password = must_change
     user.failed_login_count = 0
     user.locked_until = None
     user.updated_at = datetime.now(timezone.utc)
@@ -122,4 +125,5 @@ def reset_user_password(user_id: UUID, request: Request,
     log(db, actor=actor, org_id=user.org_id, action="user.reset_password", entity_type="user",
         entity_id=user.id, ip=client_ip(request),
         description=f"{actor.full_name} сбросил пароль пользователю «{user.full_name}»")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "reset", by=actor.full_name)
+    return credentials(user, temp, must_change)

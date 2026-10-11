@@ -5,6 +5,7 @@ from app.models.core import (  # noqa: F401
     CourseMaterial,
     Department,
     Employee,
+    EmployeeArchive,
     LibraryFolder,
     LibraryItem,
     Organization,

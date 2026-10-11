@@ -7,7 +7,7 @@ import random
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 
 pytestmark = pytest.mark.skipif(
     not (os.getenv("DATABASE_URL") and os.getenv("MIGRATION_DATABASE_URL")), reason="нет БД")
@@ -27,6 +27,7 @@ def ctx():
     with eng.begin() as c:
         c.execute(text("SELECT set_config('app.bypass_rls','on',true)"))
         p = {"o": state["orgs"], "u": state["users"]}
+        c.execute(text("DELETE FROM employee_archive WHERE org_id = ANY(CAST(:o AS uuid[]))"), p)
         c.execute(text("""DELETE FROM audit_logs WHERE org_id = ANY(CAST(:o AS uuid[]))
             OR actor_user_id IN (SELECT id FROM users WHERE org_id = ANY(CAST(:o AS uuid[])) OR id = ANY(CAST(:u AS uuid[])))"""), p)
         for t in ("employees", "departments", "positions"):
@@ -121,6 +122,8 @@ def test_full_flow(ctx):
     adm_h = hdr(adm)
 
     items = client.get(f"{API}/employees", headers=adm_h).json()["items"]
+    # пустой фильтр «любой статус» не считается ошибкой
+    assert client.get(f"{API}/employees?status=&q=", headers=adm_h).status_code == 200
     assert items and all(i["org_id"] == org_a["id"] for i in items)
     # чужого сотрудника не видно и менять нельзя
     assert client.get(f"{API}/employees/{emp_b['id']}", headers=adm_h).status_code == 404
@@ -128,6 +131,23 @@ def test_full_flow(ctx):
     # нельзя создать сотрудника в чужой организации
     assert client.post(f"{API}/employees", headers=adm_h,
                        json={"org_id": org_b["id"], "full_name": "Чужой"}).status_code == 403
+
+    # пароль, заданный вручную: слабый не принимается, свой работает
+    phone_c = rnd_phone()
+    emp_c = client.post(f"{API}/employees", headers=adm_h,
+                        json={"full_name": f"Сидоров {tag}", "phone": phone_c}).json()
+    grant_url = f"{API}/employees/{emp_c['id']}/grant-access"
+    assert client.post(grant_url, headers=adm_h, json={"password": "12345678"}).status_code == 422
+    own = client.post(grant_url, headers=adm_h, json={"password": "Sidorov2026", "must_change": False})
+    assert own.status_code == 200, own.text
+    assert own.json()["temporary_password"] == "Sidorov2026" and own.json()["must_change_password"] is False
+    assert login(phone_c, "Sidorov2026")["must_change_password"] is False
+    # сброс со своим паролем: старый перестаёт работать, смена при входе по умолчанию нужна
+    reset = client.post(f"{API}/employees/{emp_c['id']}/reset-password", headers=adm_h,
+                        json={"password": "NewPass2026"})
+    assert reset.status_code == 200 and reset.json()["must_change_password"] is True
+    assert client.post(f"{API}/auth/login", json={"phone": phone_c, "password": "Sidorov2026"}).status_code == 401
+    assert login(phone_c, "NewPass2026")["must_change_password"] is True
     # чужую организацию не видно, создавать организации нельзя
     assert client.get(f"{API}/organizations/{org_b['id']}", headers=adm_h).status_code == 404
     assert client.post(f"{API}/organizations", headers=adm_h, json={"name": "Z"}).status_code == 403
@@ -135,13 +155,34 @@ def test_full_flow(ctx):
     assert client.get(f"{API}/audit", headers=adm_h).status_code == 403
 
     # деактивация сотрудника закрывает доступ
-    assert client.post(f"{API}/employees/{emp_a.json()['id']}/deactivate", headers=adm_h).status_code == 200
+    ea = emp_a.json()["id"]
+    assert client.post(f"{API}/employees/{ea}/deactivate", headers=adm_h).status_code == 200
     assert client.get(f"{API}/auth/me", headers=hdr(new_tokens)).status_code == 401
+    # отключённого видит только главный администратор (даже с фильтром «отключённые»)
+    assert all(i["id"] != ea for i in client.get(f"{API}/employees?status=inactive", headers=adm_h).json()["items"])
+    assert client.get(f"{API}/employees/{ea}", headers=adm_h).status_code == 404
+    assert client.post(f"{API}/employees/{ea}/restore", headers=adm_h).status_code == 403
+    seen = client.get(f"{API}/employees/{ea}", headers=sa_h).json()
+    assert seen["status"] == "inactive" and seen["archive_at"]
+
+    # через 7 дней — в архив «Прервано или закрыто»: из рабочих таблиц удаляется вместе со входом
+    from datetime import datetime, timedelta, timezone
+    from app.models import Employee
+    from app.services.archive import archive_expired
+    with tenant_session(bypass=True) as db:
+        db.get(Employee, uuid.UUID(ea)).deactivated_at = datetime.now(timezone.utc) - timedelta(days=8)
+    assert archive_expired(org_ids=[org_a["id"], org_b["id"]]) == 1
+    assert client.get(f"{API}/employees/{ea}", headers=sa_h).status_code == 404
+    with tenant_session(bypass=True) as db:
+        assert db.scalar(select(User).where(User.phone == phone_a)) is None
+    assert client.get(f"{API}/archive", headers=adm_h).status_code == 403
+    arch = client.get(f"{API}/archive", params={"q": f"Иванов {tag}"}, headers=sa_h).json()["items"]
+    assert len(arch) == 1 and arch[0]["phone"] == phone_a and arch[0]["data"]["login"]["phone"] == phone_a
 
     # аудит: действия записаны, пароль не попал в журнал
     audit = client.get(f"{API}/audit", params={"org_id": org_a["id"], "limit": 200}, headers=sa_h)
     assert audit.status_code == 200
     actions = {i["action"] for i in audit.json()["items"]}
-    assert {"employee.create", "employee.grant_access", "employee.deactivate", "user.create"} <= actions
+    assert {"employee.create", "employee.grant_access", "employee.deactivate", "employee.archive", "user.create"} <= actions
     dump = json.dumps(audit.json(), ensure_ascii=False)
     assert temp_pw not in dump and adm_pw not in dump

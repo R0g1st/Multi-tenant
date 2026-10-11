@@ -105,6 +105,7 @@ class Employee(Base):
     email: Mapped[str | None] = mapped_column(String(254))
     hired_at: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), server_default="active")
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # через 7 дней — в архив
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _created()
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -202,3 +203,18 @@ class TestAttempt(Base):
     score: Mapped[int] = mapped_column()
     passed: Mapped[bool] = mapped_column(Boolean)
     answers: Mapped[list] = mapped_column(JSONB)
+
+
+class EmployeeArchive(Base):
+    """«Прервано или закрыто»: сотрудники, удалённые через неделю после отключения."""
+    __tablename__ = "employee_archive"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)  # прежний ID сотрудника
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    org_name: Mapped[str | None] = mapped_column(String(300))
+    full_name: Mapped[str] = mapped_column(String(200))
+    position_name: Mapped[str | None] = mapped_column(String(200))
+    department_name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(16))
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime] = _created()
+    data: Mapped[dict] = mapped_column(JSONB)

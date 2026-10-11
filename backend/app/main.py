@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +23,17 @@ async def lifespan(_: FastAPI):
             logger.info("Файл паролей: обновлено %s, номеров без пользователя: %s", changed, len(missing))
         except Exception as exc:  # сервер должен стартовать, даже если файл не прочитан
             logger.error("Файл паролей не загружен: %s", exc)
+    task = asyncio.create_task(_archive_loop())
     yield
+    task.cancel()
+
+
+async def _archive_loop():
+    """Раз в час переносит в архив сотрудников, отключённых больше недели назад."""
+    from app.services.archive import run_safely
+    while True:
+        await asyncio.to_thread(run_safely)
+        await asyncio.sleep(3600)
 
 
 app = FastAPI(title="Платформа охраны труда", version="0.3.0", lifespan=lifespan)
@@ -40,5 +51,15 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+class WebFiles(StaticFiles):
+    """Файлы интерфейса: браузер перепроверяет их при каждом открытии (по ETag — без повторной
+    загрузки, если файл не менялся), поэтому после обновления сайта не остаётся старой версии."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Веб-интерфейс (без сборки, ~15 КБ). Подключается последним, чтобы не перекрывать API и /docs.
-app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="web")
+app.mount("/", WebFiles(directory=Path(__file__).parent / "static", html=True), name="web")

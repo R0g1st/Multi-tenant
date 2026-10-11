@@ -7,15 +7,20 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import Actor, get_db, require_org, require_roles, resolve_org
-from app.core.security import generate_temp_password, hash_password
+from app.core.security import hash_password
 from app.models import Department, Employee, Position, RefreshSession, User
 from app.schemas import (CredentialsOut, EmployeeIn, EmployeeOut, EmployeeUpdate,
-                         GrantAccessIn, Page)
+                         GrantAccessIn, Page, PasswordChoice, credentials, resolve_password)
+from app.services import password_book
+from app.services.archive import archive_at
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 VIEWERS = ("superadmin", "center_admin", "org_admin")
 ADMINS = ("superadmin", "center_admin", "org_admin")
+# Отключённых сотрудников видит и восстанавливает только главный администратор;
+# через неделю после отключения они уходят в архив «Прервано или закрыто».
+SEES_INACTIVE = "superadmin"
 
 
 def _select():
@@ -32,12 +37,12 @@ def _out(row) -> EmployeeOut:
         department_id=e.department_id, department_name=dept,
         position_id=e.position_id, position_name=pos,
         phone=e.phone, email=e.email, hired_at=e.hired_at, status=e.status,
-        has_access=bool(user_active), last_login_at=last_login)
+        has_access=bool(user_active), last_login_at=last_login, archive_at=archive_at(e))
 
 
-def _entity(db, employee_id: UUID) -> Employee:
+def _entity(db, employee_id: UUID, actor: Actor) -> Employee:
     e = db.get(Employee, employee_id)  # RLS скрывает сотрудников чужих организаций
-    if e is None or e.deleted_at is not None:
+    if e is None or e.deleted_at is not None or (e.status != "active" and actor.role != SEES_INACTIVE):
         raise HTTPException(404, "Сотрудник не найден")
     return e
 
@@ -69,19 +74,21 @@ def _revoke_sessions(db, user_id) -> None:
 @router.get("", response_model=Page[EmployeeOut])
 def list_employees(q: str | None = None, org_id: UUID | None = None,
                    department_id: UUID | None = None, position_id: UUID | None = None,
-                   status: Literal["active", "inactive"] | None = None,
+                   status: Literal["active", "inactive", ""] | None = None,  # "" — любой статус
                    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
                    actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
     conds = [Employee.deleted_at.is_(None)]
     if q:
-        conds.append(Employee.full_name.ilike(f"%{q}%", autoescape=True))
+        conds.append(Employee.full_name.icontains(q, autoescape=True))
     if org_id:
         conds.append(Employee.org_id == org_id)
     if department_id:
         conds.append(Employee.department_id == department_id)
     if position_id:
         conds.append(Employee.position_id == position_id)
-    if status:
+    if actor.role != SEES_INACTIVE:
+        conds.append(Employee.status == "active")
+    elif status:
         conds.append(Employee.status == status)
     total = db.scalar(select(func.count()).select_from(Employee).where(*conds))
     rows = db.execute(_select().where(*conds).order_by(Employee.full_name)
@@ -107,14 +114,14 @@ def create_employee(body: EmployeeIn, request: Request,
 
 @router.get("/{employee_id}", response_model=EmployeeOut)
 def get_employee(employee_id: UUID, actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
-    _entity(db, employee_id)
+    _entity(db, employee_id, actor)
     return _view(db, employee_id)
 
 
 @router.patch("/{employee_id}", response_model=EmployeeOut)
 def update_employee(employee_id: UUID, body: EmployeeUpdate, request: Request,
                     actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     data = body.model_dump(exclude_unset=True)
     if data.get("full_name") is None:
         data.pop("full_name", None)
@@ -137,9 +144,10 @@ def update_employee(employee_id: UUID, body: EmployeeUpdate, request: Request,
 @router.post("/{employee_id}/deactivate", response_model=EmployeeOut)
 def deactivate_employee(employee_id: UUID, request: Request,
                         actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     e.status = "inactive"
     e.updated_at = datetime.now(timezone.utc)
+    e.deactivated_at = e.deactivated_at or e.updated_at  # повторное отключение не сдвигает срок архива
     if e.user_id:
         user = db.get(User, e.user_id)
         user.is_active = False
@@ -152,11 +160,12 @@ def deactivate_employee(employee_id: UUID, request: Request,
 
 @router.post("/{employee_id}/restore", response_model=EmployeeOut)
 def restore_employee(employee_id: UUID, request: Request,
-                     actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
+                     actor: Actor = Depends(require_roles(SEES_INACTIVE)), db=Depends(get_db)):
     """Возвращает сотрудника в список. Доступ в систему не восстанавливается автоматически:
     его нужно выдать заново кнопкой «Выдать доступ»."""
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     e.status = "active"
+    e.deactivated_at = None
     e.updated_at = datetime.now(timezone.utc)
     log(db, actor=actor, org_id=e.org_id, action="employee.restore", entity_type="employee",
         entity_id=e.id, ip=client_ip(request),
@@ -167,19 +176,20 @@ def restore_employee(employee_id: UUID, request: Request,
 @router.post("/{employee_id}/grant-access", response_model=CredentialsOut)
 def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None = None,
                  actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    """Создаёт (или повторно включает) личный кабинет сотрудника по номеру телефона."""
-    e = _entity(db, employee_id)
+    """Создаёт (или повторно включает) личный кабинет сотрудника по номеру телефона.
+    Пароль можно задать в запросе; иначе выдаётся случайный временный."""
+    e = _entity(db, employee_id, actor)
     if e.status != "active":
         raise HTTPException(409, "Сотрудник деактивирован. Сначала восстановите его.")
     require_org(db, e.org_id)
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is not None:
         if user.is_active:
             raise HTTPException(409, "Доступ уже выдан")
         user.is_active = True
         user.password_hash = hash_password(temp)
-        user.must_change_password = True
+        user.must_change_password = must_change
         user.failed_login_count = 0
         user.locked_until = None
         user.updated_at = datetime.now(timezone.utc)
@@ -188,7 +198,7 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
         if not phone:
             raise HTTPException(422, "Укажите номер телефона сотрудника")
         user = User(org_id=e.org_id, phone=phone, password_hash=hash_password(temp),
-                    full_name=e.full_name, role="employee", must_change_password=True)
+                    full_name=e.full_name, role="employee", must_change_password=must_change)
         db.add(user)
         try:
             db.flush()
@@ -201,19 +211,20 @@ def grant_access(employee_id: UUID, request: Request, body: GrantAccessIn | None
     log(db, actor=actor, org_id=e.org_id, action="employee.grant_access", entity_type="employee",
         entity_id=e.id, ip=client_ip(request), details={"user_id": str(user.id), "phone": user.phone},
         description=f"{actor.full_name} выдал доступ в систему сотруднику «{e.full_name}»")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "issued", by=actor.full_name)
+    return credentials(user, temp, must_change)
 
 
 @router.post("/{employee_id}/reset-password", response_model=CredentialsOut)
-def reset_password(employee_id: UUID, request: Request,
+def reset_password(employee_id: UUID, request: Request, body: PasswordChoice | None = None,
                    actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is None or not user.is_active:
         raise HTTPException(409, "У сотрудника нет активного доступа")
-    temp = generate_temp_password()
+    temp, must_change = resolve_password(body)
     user.password_hash = hash_password(temp)
-    user.must_change_password = True
+    user.must_change_password = must_change
     user.failed_login_count = 0
     user.locked_until = None
     user.updated_at = datetime.now(timezone.utc)
@@ -221,13 +232,14 @@ def reset_password(employee_id: UUID, request: Request,
     log(db, actor=actor, org_id=e.org_id, action="employee.reset_password", entity_type="employee",
         entity_id=e.id, ip=client_ip(request),
         description=f"{actor.full_name} сбросил пароль сотруднику «{e.full_name}»")
-    return CredentialsOut(user_id=user.id, phone=user.phone, temporary_password=temp)
+    password_book.record(user, temp, "reset", by=actor.full_name)
+    return credentials(user, temp, must_change)
 
 
 @router.post("/{employee_id}/revoke-access", response_model=EmployeeOut)
 def revoke_access(employee_id: UUID, request: Request,
                   actor: Actor = Depends(require_roles(*ADMINS)), db=Depends(get_db)):
-    e = _entity(db, employee_id)
+    e = _entity(db, employee_id, actor)
     user = db.get(User, e.user_id) if e.user_id else None
     if user is None or not user.is_active:
         raise HTTPException(409, "У сотрудника нет активного доступа")

@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from app.core.db import tenant_session
 from app.core.security import hash_password, normalize_phone, validate_password_strength
 from app.models import RefreshSession, User
+from app.services import password_book
 from app.services.audit import log
 
 
@@ -34,6 +35,7 @@ def main() -> None:
         if user is None:
             raise SystemExit("Пользователь с таким номером не найден. Ничего не изменено.")
         user.password_hash = hash_password(password)
+        password_book.record(user, password, "console")
         user.must_change_password = False
         user.failed_login_count = 0
         user.locked_until = None

@@ -29,8 +29,8 @@ def list_organizations(q: str | None = None, status: str | None = None,
                        actor: Actor = Depends(require_roles(*VIEWERS)), db=Depends(get_db)):
     conds = [Organization.deleted_at.is_(None)]
     if q:
-        conds.append(or_(Organization.name.ilike(f"%{q}%", autoescape=True),
-                         Organization.inn.ilike(f"%{q}%", autoescape=True)))
+        conds.append(or_(Organization.name.icontains(q, autoescape=True),
+                         Organization.inn.icontains(q, autoescape=True)))
     if status:
         conds.append(Organization.status == status)
     total = db.scalar(select(func.count()).select_from(Organization).where(*conds))

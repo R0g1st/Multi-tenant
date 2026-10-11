@@ -10,6 +10,7 @@ from app.core.security import hash_password, normalize_phone, verify_password
 from app.core.tokens import create_access_token, hash_token, new_refresh_token
 from app.models import RefreshSession, User
 from app.schemas import ChangePasswordIn, LoginIn, MeOut, RefreshIn, TokenPair
+from app.services import password_book
 from app.services.audit import client_ip, log
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -147,6 +148,7 @@ def change_password(body: ChangePasswordIn, request: Request,
             log(db, actor=actor, org_id=user.org_id, action="auth.password_changed",
                 entity_type="user", entity_id=user.id, ip=client_ip(request),
                 description=f"{user.full_name} сменил пароль")
+            password_book.record(user, body.new_password, "changed", by=user.full_name)
     if error:
         raise HTTPException(400, error)
     return tokens

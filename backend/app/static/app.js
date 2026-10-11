@@ -44,9 +44,14 @@ function modal(title,body,ok,onOk,wide){
 }
 function confirmBox(text,ok,onOk){modal('Подтвердите действие',`<p>${text}</p>`,ok,onOk)}
 function creds(r){
-  const m=modal('Доступ выдан',`<p>Телефон для входа: <b>${e(r.phone)}</b></p><p>Временный пароль — он виден только сейчас:</p><div class="pw"><code>${e(r.temporary_password)}</code><button type="button" class="g" id="cp">Копировать</button></div><p class="m">Передайте его пользователю. При первом входе система попросит придумать свой пароль.</p>`);
+  const m=modal('Доступ выдан',`<p>Телефон для входа: <b>${e(r.phone)}</b></p><p>${r.must_change_password?'Временный пароль':'Пароль'} — он виден только сейчас:</p><div class="pw"><code>${e(r.temporary_password)}</code><button type="button" class="g" id="cp">Копировать</button></div><p class="m">Передайте его пользователю. ${r.must_change_password?'При первом входе система попросит придумать свой пароль.':'Менять его при входе не потребуется.'}</p>`);
   m.querySelector('#cp').onclick=()=>navigator.clipboard.writeText(r.temporary_password).then(()=>toast('Пароль скопирован'));
 }
+// Пароль в окнах выдачи доступа и сброса: пусто — сайт придумает временный пароль сам
+const pwFields=()=>`<label>Пароль<input name="password" type="text" minlength="8" autocomplete="new-password" placeholder="Пусто — придумать автоматически"></label><p class="m" style="margin-top:-6px;font-size:13px">Не короче 8 символов, буквы и цифры. В базе хранится только в зашифрованном виде.</p><label class="chk"><input type="checkbox" name="must_change" checked> Попросить сменить пароль при первом входе</label>`;
+const pwBody=b=>{const r={must_change:b.must_change==='on'};if(b.password)r.password=b.password;delete b.password;delete b.must_change;return r};
+// Окно «задать пароль» для выдачи доступа / сброса; url — куда отправить
+const pwDialog=(title,text,ok,url,done)=>modal(title,(text?`<p>${text}</p>`:'')+pwFields(),ok,async b=>{creds(await api(url,{method:'POST',body:pwBody(b)}));done()});
 
 /* ---------- Вход ---------- */
 function renderLogin(){
@@ -65,20 +70,20 @@ function renderChange(forced){
 /* ---------- Каркас ---------- */
 function shell(){
   // у уровней 1–2 пунктов много — на главную ведёт логотип
-  const nav=center()?[['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/orgs','Заказчики'],['#/employees','Сотрудники'],['#/users','Пользователи'],['#/audit','Журнал']]
+  const nav=center()?[['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/orgs','Заказчики'],['#/employees','Сотрудники'],['#/users','Пользователи'],...(me.role==='superadmin'?[['#/passwords','Пароли'],['#/archive','Архив']]:[]),['#/audit','Журнал']]
     :me.role==='org_admin'?[['#/','Главная'],['#/library','Библиотека'],['#/courses','Курсы'],['#/training','Обучение'],['#/employees','Мои сотрудники']]
     :[['#/','Главная'],['#/learn','Моё обучение'],['#/customer','Мой заказчик']];
-  $('#app').innerHTML=`<header><div class="hd"><a class="logo" href="#/"><i>✚</i><span>Охрана труда<small>обучение персонала</small></span></a><nav>${nav.map(n=>`<a href="${n[0]}">${n[1]}</a>`).join('')}</nav><div class="me"><div><b>${e(me.full_name)}</b><small>${ROLE[me.role]}</small></div><button class="g" id="pw">Пароль</button><button class="b" id="out">Выйти</button></div></div></header><main id="v"></main><footer><div><span>© ${new Date().getFullYear()} Охрана труда · обучение персонала</span><span>${ROLE[me.role]}</span></div></footer>`;
+  $('#app').innerHTML=`<header><div class="hd${nav.length<=5?' few':''}"><a class="logo" href="#/"><i>✚</i><span>Охрана труда<small>обучение персонала</small></span></a><nav>${nav.map(n=>`<a href="${n[0]}">${n[1]}</a>`).join('')}</nav><div class="me"><div><b>${e(me.full_name)}</b><small>${ROLE[me.role]}</small></div><button class="g" id="pw">Пароль</button><button class="b" id="out">Выйти</button></div></div></header><main id="v"></main><footer><div><span>© ${new Date().getFullYear()} Охрана труда · обучение персонала</span><span>${ROLE[me.role]}</span></div></footer>`;
   $('#pw').onclick=()=>renderChange(false);
   $('#out').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{refresh_token:tok.refresh_token}})}catch{}save(null);me=null;renderLogin()};
 }
 
-const R={'':home,'library':library,'employees':employees,'orgs':orgs,'users':users,'audit':audit,'customer':customer,
-  'courses':courses,'course':courseEdit,'training':training,'learn':learn};
+const R={'':home,'library':library,'employees':employees,'orgs':orgs,'org':orgCard,'users':users,'audit':audit,'customer':customer,
+  'courses':courses,'course':courseEdit,'training':training,'learn':learn,'passwords':passwords,'archive':archive};
 async function route(){
   if(!me)return;if(!$('header'))shell();
   const [p,arg]=(location.hash.slice(2)||'').split('/'),v=$('#v');
-  const sect={course:'courses'}[p]||p;
+  const sect={course:'courses',org:'orgs'}[p]||p;
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#/'+sect));
   v.onclick=null;v.innerHTML='<p class="m">Загрузка…</p>';
   try{await(R[p]||home)(v,arg)}catch(x){v.innerHTML='';toast(x.message,1)}
@@ -235,38 +240,75 @@ async function orgs(v){
   v.innerHTML=`<div class="bar"><h1>Заказчики</h1>${center()?'<button class="b" id="add">+ Добавить заказчика</button>':''}</div><div class="filters"><input id="q" placeholder="Поиск по названию или ИНН…"></div><div id="tb"></div>`;
   const load=async()=>{
     const d=await api('/organizations?limit=200&q='+encodeURIComponent($('#q').value));
-    $('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Название</th><th>ИНН</th><th>Ответственный</th><th>Статус</th></tr>${d.items.map(o=>`<tr><td><b>${e(o.name)}</b><small>${e(o.legal_address||'')}</small></td><td>${e(o.inn||'—')}</td><td>${e(o.responsible_name||'—')}</td><td><span class="s ${o.status}">${ST[o.status]}</span></td></tr>`).join('')}</table></div>`:'<div class="card empty">Заказчиков пока нет. Нажмите «Добавить заказчика».</div>';
+    $('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Название</th><th>ИНН</th><th>Ответственный</th><th>Статус</th></tr>${d.items.map(o=>`<tr class="lnk" data-id="${o.id}"><td><b>${e(o.name)}</b><small>${e(o.legal_address||'')}</small></td><td>${e(o.inn||'—')}</td><td>${e(o.responsible_name||'—')}</td><td><span class="s ${o.status}">${ST[o.status]}</span></td></tr>`).join('')}</table></div><p class="m">Нажмите на заказчика, чтобы открыть его карточку и список подчинённых.</p>`:'<div class="card empty">Заказчиков пока нет. Нажмите «Добавить заказчика».</div>';
   };
+  $('#tb').onclick=ev=>{const r=ev.target.closest('tr[data-id]');if(r)location.hash='#/org/'+r.dataset.id};
   let t;$('#q').oninput=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};
-  if(center())$('#add').onclick=()=>modal('Новый заказчик',`<label>Название организации*<input name="name" required></label><label>ИНН<input name="inn" pattern="[0-9]{10}([0-9]{2})?" title="10 или 12 цифр"></label><label>КПП<input name="kpp" pattern="[0-9]{9}" title="9 цифр"></label><label>Юридический адрес<input name="legal_address"></label><label>Ответственный<input name="responsible_name"></label>`,'Создать',async b=>{await api('/organizations',{method:'POST',body:b});toast('Заказчик добавлен. Создайте ему вход в разделе «Пользователи».');load()});
+  if(center())$('#add').onclick=()=>modal('Новый заказчик',orgFields({}),'Создать',async b=>{const o=await api('/organizations',{method:'POST',body:b});toast('Заказчик добавлен. Теперь добавьте его подчинённых.');location.hash='#/org/'+o.id});
   await load();
+}
+const orgFields=o=>`<label>Название организации*<input name="name" required value="${e(o.name)}"></label><label>ИНН<input name="inn" pattern="[0-9]{10}([0-9]{2})?" title="10 или 12 цифр" value="${e(o.inn)}"></label><label>КПП<input name="kpp" pattern="[0-9]{9}" title="9 цифр" value="${e(o.kpp)}"></label><label>Юридический адрес<input name="legal_address" value="${e(o.legal_address)}"></label><label>Ответственный<input name="responsible_name" value="${e(o.responsible_name)}"></label><label>Телефон<input name="contact_phone" type="tel" value="${e(o.contact_phone)}"></label><label>Эл. почта<input name="contact_email" type="email" value="${e(o.contact_email)}"></label>`;
+
+/* ---------- Карточка заказчика: реквизиты, вход заказчика, подчинённые ---------- */
+async function orgCard(v,id){
+  const o=await api('/organizations/'+id);
+  const row=(k,val)=>`<tr><td class="m nw">${k}</td><td>${e(val||'—')}</td></tr>`;
+  v.innerHTML=`<p><a class="l" href="#/orgs">← Все заказчики</a></p>
+    <div class="bar"><h1>${e(o.name)} <span class="s ${o.status}">${ST[o.status]}</span></h1>${center()?'<button class="g" id="ed">Изменить</button>':''}</div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+      <div class="card"><h2>Реквизиты</h2><table>${row('ИНН',o.inn)}${row('КПП',o.kpp)}${row('Адрес',o.legal_address)}</table></div>
+      <div class="card"><h2>Контакты</h2><table>${row('Ответственный',o.responsible_name)}${row('Телефон',o.contact_phone)}${row('Эл. почта',o.contact_email)}</table></div>
+    </div>
+    <div class="card"><div class="bar"><h2>Вход заказчика в систему</h2><button class="g sm" id="au">+ Создать вход</button></div><div id="ad"></div></div>
+    <div class="card" id="st"></div>`;
+  if(center())$('#ed').onclick=()=>modal('Заказчик',orgFields(o),'Сохранить',async b=>{
+    const body={};['name','inn','kpp','legal_address','responsible_name','contact_phone','contact_email'].forEach(k=>body[k]=b[k]??null);
+    await api('/organizations/'+id,{method:'PATCH',body});toast('Сохранено');orgCard(v,id);
+  });
+  const admins=async()=>{
+    const d=await api('/users?'+new URLSearchParams({limit:200,role:'org_admin',org_id:id}));
+    $('#ad').innerHTML=d.items.length?`<table>${d.items.map(u=>`<tr><td><b>${e(u.full_name)}</b><small>${e(u.phone)}</small></td><td class="nw">${u.last_login_at?'Входил '+dt(u.last_login_at):'Ещё не входил'}</td><td class="ra"><span class="s ${u.is_active?'active':'inactive'}">${u.is_active?'Активен':'Отключён'}</span></td></tr>`).join('')}</table>`:'<p class="m">У заказчика пока нет входа. Создайте его, чтобы заказчик сам видел своих подчинённых и их обучение.</p>';
+  };
+  $('#au').onclick=()=>modal('Вход для заказчика',`<label>ФИО*<input name="full_name" required value="${e(o.responsible_name)}"></label><label>Телефон*<input name="phone" type="tel" required placeholder="+7 900 000-00-00" value="${e(o.contact_phone)}"></label>${pwFields()}`,'Создать',async x=>{
+    const pw=pwBody(x);creds(await api('/users',{method:'POST',body:{...x,...pw,role:'org_admin',org_id:id}}));admins();
+  });
+  await Promise.all([admins(),staff($('#st'),o)]);
 }
 
 /* ---------- Сотрудники ---------- */
-async function employees(v){
-  const w=center(),os=w?(await api('/organizations?limit=200')).items:[];
+async function employees(v){await staff(v,null)}
+
+// Список подчинённых. org задан — внутри карточки заказчика (только его подчинённые), иначе отдельная страница.
+async function staff(v,org){
+  const w=center()&&!org,os=w?(await api('/organizations?limit=200')).items:[];
   const opts=os.map(o=>`<option value="${o.id}">${e(o.name)}</option>`).join('');
-  v.innerHTML=`<div class="bar"><h1>${w?'Сотрудники':'Мои сотрудники'}</h1>${canEdit()?'<button class="b" id="add">+ Добавить сотрудника</button>':''}</div><div class="filters"><input id="q" placeholder="Поиск по ФИО…">${w?`<select id="o"><option value="">Все заказчики</option>${opts}</select>`:''}<select id="s"><option value="">Любой статус</option><option value="active">Активные</option><option value="inactive">Деактивированные</option></select></div><div id="tb"></div>`;
+  const sa=me.role==='superadmin'; // отключённых видит и восстанавливает только главный администратор
+  const title=org?'<h2>Подчинённые</h2>':`<h1>${center()?'Сотрудники':'Мои сотрудники'}</h1>`;
+  v.innerHTML=`<div class="bar">${title}${canEdit()?`<button class="b" id="add">+ Добавить ${org?'подчинённого':'сотрудника'}</button>`:''}</div><div class="filters"><input id="q" placeholder="Поиск по ФИО…">${w?`<select id="o"><option value="">Все заказчики</option>${opts}</select>`:''}${sa?'<select id="s"><option value="">Любой статус</option><option value="active">Активные</option><option value="inactive">Отключённые (видите только вы)</option></select>':''}</div><div id="tb"></div>`;
+  const q=s=>v.querySelector(s);
   const btn=(a,id,t,c='g')=>`<button class="${c} sm" data-a="${a}" data-id="${id}">${t}</button>`;
-  const acts=x=>(x.status==='active'&&!x.has_access?btn('grant',x.id,'Выдать доступ','b'):'')+(x.has_access?btn('reset',x.id,'Сбросить пароль'):'')+btn(x.status==='active'?'off':'on',x.id,x.status==='active'?'Деактивировать':'Восстановить',x.status==='active'?'d':'g');
+  const acts=x=>(x.status==='active'&&!x.has_access?btn('grant',x.id,'Выдать доступ','b'):'')+(x.has_access?btn('reset',x.id,'Сбросить пароль'):'')+(x.status==='active'?btn('off',x.id,'Деактивировать','d'):sa?btn('on',x.id,'Восстановить'):'');
   const load=async()=>{
-    const p=new URLSearchParams({limit:200,q:$('#q').value,status:$('#s').value});if(w&&$('#o').value)p.set('org_id',$('#o').value);
+    const p=new URLSearchParams({limit:200});
+    if(q('#q').value)p.set('q',q('#q').value);if(sa&&q('#s').value)p.set('status',q('#s').value); // пустой фильтр не отправляем
+    if(org)p.set('org_id',org.id);else if(w&&q('#o').value)p.set('org_id',q('#o').value);
     const d=await api('/employees?'+p);
-    $('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Подразделение</th><th>Телефон</th><th>Последний вход</th><th>Статус</th>${canEdit()?'<th></th>':''}</tr>${d.items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e(x.position_name||'')}</small></td><td>${e(x.department_name||'—')}</td><td>${e(x.phone||'—')}</td><td class="nw">${x.last_login_at?dt(x.last_login_at):(x.has_access?'Ещё не входил':'—')}</td><td><span class="s ${x.status}">${ST[x.status]}</span> ${x.has_access?'<span class="s ok">Есть доступ</span>':''}</td>${canEdit()?`<td class="ra">${acts(x)}</td>`:''}</tr>`).join('')}</table></div>`:'<div class="card empty">Сотрудников не найдено.</div>';
+    q('#tb').innerHTML=d.items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Подразделение</th><th>Телефон</th><th>Последний вход</th><th>Статус</th>${canEdit()?'<th></th>':''}</tr>${d.items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e(x.position_name||'')}</small></td><td>${e(x.department_name||'—')}</td><td>${e(x.phone||'—')}</td><td class="nw">${x.last_login_at?dt(x.last_login_at):(x.has_access?'Ещё не входил':'—')}</td><td><span class="s ${x.status}">${ST[x.status]}</span>${x.archive_at?`<small>в архив ${dd(x.archive_at)}</small>`:''} ${x.has_access?'<span class="s ok">Есть доступ</span>':''}</td>${canEdit()?`<td class="ra">${acts(x)}</td>`:''}</tr>`).join('')}</table></div>`:`<div class="${org?'':'card '}empty">${org?'Подчинённых пока нет. Нажмите «Добавить подчинённого».':'Сотрудников не найдено.'}</div>`;
   };
   let t;const lazy=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};
-  $('#q').oninput=lazy;$('#s').onchange=lazy;if(w)$('#o').onchange=lazy;
-  if(canEdit())$('#add').onclick=()=>modal('Новый сотрудник',`${w?`<label>Заказчик*<select name="org_id" required><option value="">Выберите…</option>${opts}</select></label>`:''}<label>ФИО*<input name="full_name" required></label><label>Телефон<input name="phone" type="tel" placeholder="+7 900 000-00-00"></label><p class="m" style="margin-top:-6px;font-size:13px">Телефон нужен, чтобы выдать сотруднику доступ в систему.</p><label>Дата приёма на работу<input name="hired_at" type="date"></label>`,'Добавить',async b=>{await api('/employees',{method:'POST',body:b});toast('Сотрудник добавлен');load()});
-  $('#tb').onclick=async ev=>{
+  q('#q').oninput=lazy;if(sa)q('#s').onchange=lazy;if(w)q('#o').onchange=lazy;
+  if(canEdit())q('#add').onclick=()=>modal(org?'Новый подчинённый — '+e(org.name):'Новый сотрудник',`${w?`<label>Заказчик*<select name="org_id" required><option value="">Выберите…</option>${opts}</select></label>`:''}<label>ФИО*<input name="full_name" required></label><label>Телефон<input name="phone" type="tel" placeholder="+7 900 000-00-00"></label><p class="m" style="margin-top:-6px;font-size:13px">Телефон нужен, чтобы выдать сотруднику доступ в систему.</p><label>Дата приёма на работу<input name="hired_at" type="date"></label>`,'Добавить',async b=>{if(org&&center())b.org_id=org.id;await api('/employees',{method:'POST',body:b});toast('Сотрудник добавлен');load()});
+  q('#tb').onclick=async ev=>{
     const b=ev.target.closest('button[data-a]');if(!b)return;const id=b.dataset.id,a=b.dataset.a;
     const run=async()=>{
-      if(a==='grant'||a==='reset')creds(await api(`/employees/${id}/${a==='grant'?'grant-access':'reset-password'}`,{method:'POST'}));
-      else{await api(`/employees/${id}/${a==='off'?'deactivate':'restore'}`,{method:'POST'});toast(a==='off'?'Сотрудник деактивирован':'Сотрудник восстановлен. Доступ нужно выдать заново.')}
+      await api(`/employees/${id}/${a==='off'?'deactivate':'restore'}`,{method:'POST'});
+      toast(a==='off'?'Сотрудник деактивирован':'Сотрудник восстановлен. Доступ нужно выдать заново.');
       load();
     };
     try{
-      if(a==='reset')return confirmBox('Сбросить пароль? Сотруднику придётся войти с новым временным паролем.','Сбросить',run);
-      if(a==='off')return confirmBox('Деактивировать сотрудника? Его доступ в систему будет закрыт.','Деактивировать',run);
+      if(a==='grant')return pwDialog('Выдать доступ','Сотрудник будет входить по своему номеру телефона.','Выдать доступ',`/employees/${id}/grant-access`,load);
+      if(a==='reset')return pwDialog('Новый пароль','Старый пароль перестанет работать, сотрудник будет отключён от сайта.','Сохранить пароль',`/employees/${id}/reset-password`,load);
+      if(a==='off')return confirmBox('Деактивировать сотрудника? Его доступ в систему закроется, он сразу пропадёт из списков у всех, кроме главного администратора, а через 7 дней будет удалён и перенесён в архив «Прервано или закрыто».','Деактивировать',run);
       await run();
     }catch(x){toast(x.message,1)}
   };
@@ -285,19 +327,94 @@ async function users(v){
   };
   let t;$('#q').oninput=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};$('#r').onchange=()=>load().catch(x=>toast(x.message,1));
   $('#add').onclick=()=>{
-    const m=modal('Новый пользователь',`<label>Роль*<select name="role">${can.map(r=>`<option value="${r}"${r==='org_admin'?' selected':''}>${ROLE[r]}</option>`).join('')}</select></label><label id="ol">Заказчик*<select name="org_id"><option value="">Выберите…</option>${os.map(o=>`<option value="${o.id}">${e(o.name)}</option>`).join('')}</select></label><label>ФИО*<input name="full_name" required></label><label>Телефон*<input name="phone" type="tel" required placeholder="+7 900 000-00-00"></label>`,'Создать',async x=>{
+    const m=modal('Новый пользователь',`<label>Роль*<select name="role">${can.map(r=>`<option value="${r}"${r==='org_admin'?' selected':''}>${ROLE[r]}</option>`).join('')}</select></label><label id="ol">Заказчик*<select name="org_id"><option value="">Выберите…</option>${os.map(o=>`<option value="${o.id}">${e(o.name)}</option>`).join('')}</select></label><label>ФИО*<input name="full_name" required></label><label>Телефон*<input name="phone" type="tel" required placeholder="+7 900 000-00-00"></label>${pwFields()}`,'Создать',async x=>{
       if(x.role!=='org_admin')delete x.org_id;else if(!x.org_id)throw new Error('Выберите заказчика');
-      creds(await api('/users',{method:'POST',body:x}));load();
+      const pw=pwBody(x);creds(await api('/users',{method:'POST',body:{...x,...pw}}));load();
     });
     const role=m.querySelector('[name=role]'),sync=()=>m.querySelector('#ol').hidden=role.value!=='org_admin';role.onchange=sync;sync();
   };
   $('#tb').onclick=async ev=>{
     const b=ev.target.closest('button[data-a]');if(!b)return;const id=b.dataset.id,a=b.dataset.a;
     try{
-      if(a==='reset')return confirmBox('Сбросить пароль? Пользователю придётся войти с новым временным паролем.','Сбросить',async()=>{creds(await api(`/users/${id}/reset-password`,{method:'POST'}));load()});
+      if(a==='reset')return pwDialog('Новый пароль','Старый пароль перестанет работать, пользователь будет отключён от сайта.','Сохранить пароль',`/users/${id}/reset-password`,load);
       await api(`/users/${id}`,{method:'PATCH',body:{is_active:a==='on'}});toast(a==='on'?'Пользователь включён':'Пользователь отключён');load();
     }catch(x){toast(x.message,1)}
   };
+  await load();
+}
+
+/* ---------- Книга паролей (только главный администратор) ----------
+   Пароли расшифровываются на сервере мастер-паролем при каждом открытии и живут только
+   в памяти этой страницы: никуда не сохраняются и стираются при уходе со страницы или через 5 минут. */
+async function passwords(v){
+  const st=await api('/password-book/status');
+  if(!st.initialized){
+    v.innerHTML=`<div class="bar"><h1>Пароли</h1></div><div class="card" style="max-width:640px"><h2>Создайте книгу паролей</h2>
+      <p>Здесь будут видны пароли всех пользователей. Видите их только вы. Пароли хранятся отдельно от базы сайта, в зашифрованном файле, и открываются вашим мастер-паролем.</p>
+      <p class="m">Мастер-пароль нигде не сохраняется. <b>Если его забыть, открыть книгу будет невозможно</b> — запишите его в надёжное место. В книгу попадают пароли, выданные или изменённые после её создания; старые пароли узнать нельзя, их можно только сбросить.</p>
+      <form id="f"><label>Мастер-пароль (не короче 12 символов)<input name="passphrase" type="password" minlength="12" required autocomplete="new-password"></label><label>Повторите мастер-пароль<input name="again" type="password" minlength="12" required autocomplete="new-password"></label><button class="b">Создать книгу паролей</button></form></div>`;
+    $('#f').onsubmit=async ev=>{ev.preventDefault();const b=fd(ev.target);
+      if(b.passphrase!==b.again)return toast('Мастер-пароли не совпадают',1);
+      try{await api('/password-book/init',{method:'POST',body:{passphrase:b.passphrase}});toast('Книга паролей создана');passwords(v)}catch(x){toast(x.message,1)}};
+    return;
+  }
+  const lock=()=>{
+    v.innerHTML=`<div class="bar"><h1>Пароли</h1><button class="g" id="chg">Сменить мастер-пароль</button></div><div class="card" style="max-width:520px"><h2>Книга закрыта</h2><p class="m">Введите мастер-пароль, чтобы увидеть пароли пользователей. Через 5 минут без действий книга закроется сама.</p>
+      <form id="f"><label>Мастер-пароль<input name="passphrase" type="password" required autocomplete="off" autofocus></label><button class="b">Открыть</button></form></div>`;
+    $('#f').onsubmit=async ev=>{ev.preventDefault();const b=ev.target.querySelector('button');b.disabled=true;
+      try{show(await api('/password-book/unlock',{method:'POST',body:{passphrase:fd(ev.target).passphrase}}))}catch(x){toast(x.message,1);b.disabled=false}};
+    $('#chg').onclick=()=>modal('Сменить мастер-пароль',`<label>Текущий мастер-пароль<input name="current" type="password" required autocomplete="off"></label><label>Новый мастер-пароль (не короче 12 символов)<input name="new" type="password" minlength="12" required autocomplete="new-password"></label><label>Повторите новый<input name="again" type="password" minlength="12" required autocomplete="new-password"></label>`,'Сменить',async b=>{
+      if(b.new!==b.again)throw new Error('Новые мастер-пароли не совпадают');
+      await api('/password-book/passphrase',{method:'POST',body:{current:b.current,new:b.new}});toast('Мастер-пароль изменён');
+    });
+  };
+  let timer;
+  const show=items=>{
+    const here=location.hash;
+    const close=()=>{clearTimeout(timer);v.onclick=v.oninput=null;items=null;if(location.hash===here)lock()};
+    const touch=()=>{clearTimeout(timer);timer=setTimeout(()=>{close();toast('Книга паролей закрыта: 5 минут без действий')},5*60*1000)};
+    addEventListener('hashchange',()=>{clearTimeout(timer);items=null;v.oninput=null},{once:true});
+    const known=items.filter(i=>i.password).length;
+    v.innerHTML=`<div class="bar"><h1>Пароли</h1><button class="d" id="cl">Закрыть книгу</button></div>
+      <p class="m">Пароли известны для ${known} из ${items.length} пользователей. Остальные заданы до создания книги — чтобы пароль появился здесь, сбросьте его.</p>
+      <div class="filters"><input id="q" placeholder="Поиск по ФИО, телефону или заказчику…"><select id="r"><option value="">Все роли</option>${Object.entries(ROLE).map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select></div><div id="tb"></div>`;
+    const draw=()=>{
+      const q=$('#q').value.toLowerCase(),r=$('#r').value;
+      const rows=items.filter(i=>(!r||i.role===r)&&(!q||[i.full_name,i.phone,i.org_name].some(x=>(x||'').toLowerCase().includes(q))));
+      $('#tb').innerHTML=rows.length?`<div class="tw"><table><tr><th>Пользователь</th><th>Роль</th><th>Телефон (логин)</th><th>Пароль</th><th>Когда задан</th></tr>${rows.map(i=>`<tr><td><b>${e(i.full_name)}</b>${i.is_active?'':' <span class="s inactive">Отключён</span>'}</td><td>${ROLE[i.role]}${i.org_name?`<small>${e(i.org_name)}</small>`:''}</td><td class="nw">${e(i.phone)}</td><td class="nw">${i.password?`<code class="pwv" data-id="${i.user_id}">••••••••</code> <button class="g sm" data-a="see" data-id="${i.user_id}">Показать</button><button class="g sm" data-a="copy" data-id="${i.user_id}">Копировать</button>`:'<span class="m">неизвестен — сбросьте</span>'}</td><td>${i.set_at?`${dt(i.set_at)}<small>${e(i.source||'')}${i.set_by?' · '+e(i.set_by):''}</small>`:'—'}</td></tr>`).join('')}</table></div>`:'<div class="card empty">Никого не найдено.</div>';
+    };
+    v.oninput=()=>{touch();draw()};
+    v.onclick=ev=>{touch();const b=ev.target.closest('button[data-a]');if(!b)return;
+      const i=items.find(x=>x.user_id===b.dataset.id);if(!i)return;
+      if(b.dataset.a==='copy')return navigator.clipboard.writeText(i.password).then(()=>toast('Пароль скопирован'));
+      const c=v.querySelector(`.pwv[data-id="${i.user_id}"]`),open=c.textContent!=='••••••••';
+      c.textContent=open?'••••••••':i.password;b.textContent=open?'Показать':'Скрыть';
+    };
+    $('#r').onchange=()=>{touch();draw()};
+    $('#cl').onclick=close;
+    touch();draw();
+  };
+  lock();
+}
+
+/* ---------- Архив «Прервано или закрыто» (только главный администратор) ----------
+   Сюда через 7 дней после отключения переносятся сотрудники вместе с историей обучения. */
+const AST={assigned:'Назначено',in_progress:'В процессе',passed:'Пройдено'};
+async function archive(v){
+  v.innerHTML=`<div class="bar"><h1>Прервано или закрыто</h1></div><p class="m">Сотрудники, отключённые больше 7 дней назад. Из рабочих списков они удалены вместе со входом в систему; здесь сохранены их данные и обучение. Раздел видите только вы.</p><div class="filters"><input id="q" placeholder="Поиск по ФИО, заказчику или телефону…"></div><div id="tb"></div>`;
+  let items=[];
+  const load=async()=>{
+    const p=new URLSearchParams({limit:500});if($('#q').value)p.set('q',$('#q').value);
+    items=(await api('/archive?'+p)).items;
+    $('#tb').innerHTML=items.length?`<div class="tw"><table><tr><th>Сотрудник</th><th>Заказчик</th><th>Телефон</th><th>Отключён</th><th>В архиве с</th><th></th></tr>${items.map(x=>`<tr><td><b>${e(x.full_name)}</b><small>${e([x.position_name,x.department_name].filter(Boolean).join(' · '))}</small></td><td>${e(x.org_name||'—')}</td><td class="nw">${e(x.phone||'—')}</td><td class="nw">${x.deactivated_at?dd(x.deactivated_at):'—'}</td><td class="nw">${dd(x.archived_at)}</td><td class="ra"><button class="g sm" data-id="${x.id}">Подробнее</button></td></tr>`).join('')}</table></div>`:'<div class="card empty">Архив пуст.</div>';
+  };
+  $('#tb').onclick=ev=>{const b=ev.target.closest('button[data-id]');if(!b)return;
+    const x=items.find(i=>i.id===b.dataset.id),d=x.data||{},em=d.employee||{},lg=d.login,tr=d.training||[];
+    modal(e(x.full_name),`<p>Заказчик: <b>${e(x.org_name||'—')}</b><br>Телефон: ${e(x.phone||'—')}${em.email?'<br>Эл. почта: '+e(em.email):''}${em.hired_at?'<br>Принят: '+dd(em.hired_at):''}<br>Отключён: ${x.deactivated_at?dt(x.deactivated_at):'—'}<br>Перенесён в архив: ${dt(x.archived_at)}</p>
+      <p>${lg?`Вход в систему был по номеру <b>${e(lg.phone)}</b>${lg.last_login_at?', последний вход '+dt(lg.last_login_at):', ни разу не входил'}.`:'Доступа в систему не было.'}</p>
+      ${tr.length?`<div class="tw"><table><tr><th>Курс</th><th>Статус</th><th>Результат</th><th>Пройден</th></tr>${tr.map(t=>`<tr><td>${e(t.course)}</td><td>${t.cancelled_at?'Отменено':AST[t.status]||e(t.status)}</td><td>${t.score!=null?t.score+'%':'—'}</td><td class="nw">${t.completed_at?dd(t.completed_at):'—'}</td></tr>`).join('')}</table></div>`:'<p class="m">Обучение не назначалось.</p>'}`,null,null,true);
+  };
+  let t;$('#q').oninput=()=>{clearTimeout(t);t=setTimeout(()=>load().catch(x=>toast(x.message,1)),300)};
   await load();
 }
 
